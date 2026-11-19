@@ -1,0 +1,6 @@
+// Organizations service enums.
+
+enum OrganizationStatus {
+  ACTIVE
+  SUSPENDED
+}

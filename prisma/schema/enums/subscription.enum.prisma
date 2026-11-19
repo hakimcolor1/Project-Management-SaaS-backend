@@ -1,0 +1,8 @@
+// Subscriptions service enums.
+
+enum SubscriptionStatus {
+  ACTIVE
+  EXPIRED
+  CANCELLED
+  PENDING
+}

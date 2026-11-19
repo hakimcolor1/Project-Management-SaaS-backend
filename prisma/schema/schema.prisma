@@ -2,14 +2,15 @@
 // Multi-tenant model: every tenant-owned row carries `organizationId`, and
 // services always scope queries by the caller's organization.
 //
-// Layout (prisma.config.ts points `schema` at this folder):
-//   schema.prisma  generator + datasource (this file)
-//   enums.prisma   all enums
-//   models/*.prisma one file per domain
+// prisma.config.ts points `schema` at this folder; Prisma merges every file:
+//   schema.prisma         generator + datasource (this file)
+//   <service>.prisma      models of one service (auth, user, organization,
+//                         project, task, subscription, payment, audit-log)
+//   enums/<service>.enum.prisma   enums of that service
 
 generator client {
   provider            = "prisma-client"
-  output              = "../src/generated/prisma"
+  output              = "../../src/generated/prisma"
   moduleFormat        = "esm"
   importFileExtension = "js"
 }

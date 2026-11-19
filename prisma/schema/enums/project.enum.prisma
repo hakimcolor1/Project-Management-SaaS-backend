@@ -1,0 +1,8 @@
+// Projects service enums.
+
+enum ProjectStatus {
+  ACTIVE
+  COMPLETED
+  ON_HOLD
+  ARCHIVED
+}

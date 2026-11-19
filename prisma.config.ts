@@ -9,9 +9,9 @@ try {
 }
 
 export default defineConfig({
-  // Multi-file schema: every *.prisma file under prisma/ (schema.prisma,
-  // enums.prisma, models/*.prisma) is merged into one schema.
-  schema: "prisma",
+  // Multi-file schema: every *.prisma file under prisma/schema/ (one file per
+  // service + enums/<service>.enum.prisma) is merged into one schema.
+  schema: "prisma/schema",
   migrations: {
     path: "prisma/migrations",
     seed: "tsx prisma/seed.ts",

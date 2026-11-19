@@ -1,0 +1,12 @@
+// Payments service enums.
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  CANCELLED
+}
+
+enum PaymentGateway {
+  SSLCOMMERZ
+}
