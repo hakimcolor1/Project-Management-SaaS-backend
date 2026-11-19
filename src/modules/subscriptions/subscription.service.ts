@@ -1,6 +1,7 @@
 import { prisma } from "../../config/database.js";
 import type { Prisma, SubscriptionPlan } from "../../generated/prisma/client.js";
 import { AppError } from "../../utils/app-error.js";
+import { CacheKeys, CacheTtlSeconds, getOrSetCache } from "../../utils/cache.js";
 import { FREE_PLAN_NAME } from "./subscription.constant.js";
 
 type Db = Prisma.TransactionClient;
@@ -103,10 +104,12 @@ export const toPlanView = (plan: SubscriptionPlan) => ({
   maxTasksPerProject: plan.maxTasksPerProject,
 });
 
-export const listActivePlans = async () => {
-  const plans = await prisma.subscriptionPlan.findMany({ where: { isActive: true }, orderBy: { price: "asc" } });
-  return plans.map(toPlanView);
-};
+/** Public plan list – cached (read-only, invalidated when an admin edits a plan). */
+export const listActivePlans = () =>
+  getOrSetCache(CacheKeys.activePlans, CacheTtlSeconds.activePlans, async () => {
+    const plans = await prisma.subscriptionPlan.findMany({ where: { isActive: true }, orderBy: { price: "asc" } });
+    return plans.map(toPlanView);
+  });
 
 /** Flags ACTIVE subscriptions whose end date has passed as EXPIRED (bookkeeping only – limits never relied on it). */
 export const expireEndedSubscriptions = (organizationId: string, db: Db = prisma) =>
