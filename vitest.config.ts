@@ -1,16 +1,20 @@
 import { defineConfig } from "vitest/config";
+import { TEST_DATABASE_URL } from "./tests/setup/test-database.js";
 
 // Tests never read `.env`; they get an isolated, non-secret configuration.
-// Override the database with TEST_DATABASE_URL when running DB-backed tests.
+// DB-backed tests use a dedicated database (TEST_DATABASE_URL, default: the
+// `teamflow_test` DB from docker-compose) that is migrated before the run.
 export default defineConfig({
   test: {
     environment: "node",
     include: ["tests/**/*.test.ts"],
+    globalSetup: ["tests/setup/global-setup.ts"],
+    // DB-backed test files truncate shared tables, so run files one at a time.
+    fileParallelism: false,
     restoreMocks: true,
     env: {
       NODE_ENV: "test",
-      DATABASE_URL:
-        process.env.TEST_DATABASE_URL ?? "postgresql://teamflow:teamflow@localhost:5433/teamflow_test",
+      DATABASE_URL: TEST_DATABASE_URL,
       JWT_ACCESS_SECRET: "test-access-secret-0123456789abcdef0123456789",
       JWT_REFRESH_SECRET: "test-refresh-secret-0123456789abcdef012345678",
       JWT_ACCESS_EXPIRES_IN: "15m",
