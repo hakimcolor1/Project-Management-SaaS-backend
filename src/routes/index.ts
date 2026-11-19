@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { adminRoutes } from "../modules/admin/admin.route.js";
 import { authRoutes } from "../modules/auth/auth.route.js";
 import { healthRoutes } from "../modules/health/health.route.js";
 import { organizationRoutes } from "../modules/organizations/organization.route.js";
@@ -21,6 +22,7 @@ const moduleRoutes: { path: string; router: Router }[] = [
   { path: "/plans", router: planRoutes },
   { path: "/subscriptions", router: subscriptionRoutes },
   { path: "/payments", router: paymentRoutes },
+  { path: "/admin", router: adminRoutes },
   // Further modules (organizations, projects, …) are added phase by phase.
 ];
 
