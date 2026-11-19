@@ -9,8 +9,8 @@ Source of truth: `../REQUIREMENTS.md`. One phase at a time; each phase ends with
 | 1 | Project initialization & database | Bun/TS/Express setup, Prisma schema (10 models) + migration, seed, env validation, error handling, response/pagination/JWT/password utils, health check | ✅ Done (2026-11-19) |
 | 2 | Authentication & authorization | register, login, refresh-token rotation, logout, me, Google ID-token login; `authenticate` + `authorize` middlewares; auth rate limit; DB-backed integration tests | ✅ Done (2026-11-19) |
 | 3 | Organizations & members (+ audit log helper, plan limits) | create/current/update org; add (by existing email), list, update, remove members; organization-scope middleware; suspended-org handling; member plan limits | ✅ Done (2026-11-20) |
-| 4 | Projects | CRUD, pagination, search, status filter, soft delete, progress %, project plan limits, audit entries | ⏳ In progress |
-| 5 | Tasks | CRUD, assign, status workflow, member-permitted fields, filters, pagination, due-date + assignee validation, task limits, audit entries | Planned |
+| 4 | Projects | CRUD, pagination, search, status filter, soft delete, progress %, project plan limits, audit entries | ✅ Done (2026-11-20) |
+| 5 | Tasks | CRUD, assign, status workflow, member-permitted fields, filters, pagination, due-date + assignee validation, task limits, audit entries | ⏳ In progress |
 | 6 | Subscriptions & SSLCommerz | plans, current subscription, effective-plan resolution (expiry), initiate / validate / IPN / history, gateway validation, idempotent processing | Planned |
 | 7 | Super admin + Redis | dashboard stats, organizations, payments, audit logs, org status; Upstash caching with expiry + invalidation | Planned |
 | 8 | API documentation | Swagger UI at `/api-docs` (OpenAPI YAML), Postman collection + environment, `docs/API.md` | Planned |
@@ -29,6 +29,41 @@ Source of truth: `../REQUIREMENTS.md`. One phase at a time; each phase ends with
 ## Open questions
 
 - `PATCH /organizations/current/members/:memberId`: membership has no editable fields in §6.3. Decision: the owner activates or deactivates the member's access (`{ "isActive": false }`). No answer was given, so this was implemented as proposed. Easy to change if a different meaning is wanted.
+
+---
+
+## Phase 4 – Projects ✅
+
+### Delivered – Phase 4
+
+- **Endpoints** (`src/modules/projects/`):
+  - `POST /projects` (owner)
+  - `GET /projects` (owner/member): pagination, `search` on name/description, `status` filter, `sortBy` = createdAt / name / dueDate, `sortOrder`.
+  - `GET /projects/:projectId` (owner/member)
+  - `PATCH /projects/:projectId` (owner)
+  - `DELETE /projects/:projectId` (owner)
+- **Progress:** completed ÷ total tasks × 100, to 2 decimals; 0 when there are no tasks; soft-deleted tasks are ignored. Every project response includes `taskStats` (total, completed, count per status). A list page needs only one grouped query, with no query per project.
+- **Plan limit:** "active projects" means status ACTIVE and not deleted. Creating an ACTIVE project, or switching another project back to ACTIVE, is checked under the organization row lock. Projects with other statuses don't count (FREE: 2, PRO: unlimited).
+- **Dates:**
+  - `YYYY-MM-DD` date-only values.
+  - On create, the due date can't be in the past.
+  - The due date must be on or after the start date, also when checked against values already stored.
+- **Soft delete:** sets `deletedAt` on the project and its tasks. Deleted rows disappear from every query and return 404.
+- **Isolation:** every query is scoped to the caller's organization, so another organization's project ids return 404.
+- **Audit:** PROJECT_CREATED / PROJECT_UPDATED (changed fields and status before/after) / PROJECT_DELETED (number of tasks deleted).
+
+### Verification – Phase 4
+
+`bun run typecheck` ✅ · `bun run lint` ✅ · `bun run test` ✅ **105/105**. The 13 new tests cover:
+
+- the progress formula
+- create, the member/unauthenticated rejections, and validation (name, date order, past date, date format, mass assignment, unknown status)
+- the FREE limit, including re-activating a project
+- the list: organization isolation, deleted projects excluded, progress 33.33%, search, filter, sorting and pagination
+- get: invalid id (422), another organization's or a deleted project (404)
+- update, with the date check against stored values and the audit entry
+- update/delete by a member (403) or another organization (404)
+- soft delete of the project and its tasks
 
 ---
 
@@ -59,6 +94,7 @@ Source of truth: `../REQUIREMENTS.md`. One phase at a time; each phase ends with
 ### Verification – Phase 3
 
 `bun run typecheck` ✅ · `bun run lint` ✅ · `bun run test` ✅ **92/92**. The 23 new organization tests cover:
+
 - create, duplicate (409), and the wrong role or no login (403/401)
 - current organization for owner and member, no organization (404), suspended organization
 - profile update, member and empty-body rejections
