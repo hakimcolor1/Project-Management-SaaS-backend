@@ -23,7 +23,7 @@ Source of truth: `../REQUIREMENTS.md`. One phase at a time; each phase ends with
 | Google OAuth Client ID (GCP) | `POST /auth/google` | ❌ Not provided. The endpoint is implemented and returns **503 "Google login is not configured"** until `GOOGLE_CLIENT_ID` is set. It is never faked. |
 | SSLCommerz sandbox Store ID / password | Phase 6 – payments | ❌ Not provided |
 | Upstash Redis REST URL / token | Phase 7 – caching | ❌ Not provided (caching will be skipped when unset) |
-| Production PostgreSQL (e.g. Neon) | Phase 9 | ❌ Not provided |
+| Production PostgreSQL | Phase 9 | ✅ Prisma Postgres (`db.prisma.io`) connected 2026-11-19 via `.env` `DATABASE_URL` (`sslmode=verify-full`): `init` migration applied with `migrate deploy`, seed run (SUPER_ADMIN + FREE/PRO), `/health` → database connected, admin login + `/auth/me` verified. Still to do: set the same `DATABASE_URL` on Vercel in Phase 9. Tests keep using the local `teamflow_test` DB. |
 | GitHub remote + Vercel project | Push / deployment | ❌ No remote configured (local commits only) |
 
 ## Open questions
