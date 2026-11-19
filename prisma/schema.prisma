@@ -1,0 +1,21 @@
+// TeamFlow – Prisma schema (multi-file)
+// Multi-tenant model: every tenant-owned row carries `organizationId`, and
+// services always scope queries by the caller's organization.
+//
+// Layout (prisma.config.ts points `schema` at this folder):
+//   schema.prisma  generator + datasource (this file)
+//   enums.prisma   all enums
+//   models/*.prisma one file per domain
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+// The connection URL lives in prisma.config.ts (Prisma 7) and the runtime
+// client connects through the `pg` driver adapter (src/config/database.ts).
+datasource db {
+  provider = "postgresql"
+}
