@@ -11,8 +11,8 @@ Source of truth: `../REQUIREMENTS.md`. One phase at a time; each phase ends with
 | 3 | Organizations & members (+ audit log helper, plan limits) | create/current/update org; add (by existing email), list, update, remove members; organization-scope middleware; suspended-org handling; member plan limits | ✅ Done (2026-11-20) |
 | 4 | Projects | CRUD, pagination, search, status filter, soft delete, progress %, project plan limits, audit entries | ✅ Done (2026-11-20) |
 | 5 | Tasks | CRUD, assign, status workflow, member-permitted fields, filters, pagination, due-date + assignee validation, task limits, audit entries | ✅ Done (2026-11-20) |
-| 6 | Subscriptions & SSLCommerz | plans, current subscription, effective-plan resolution (expiry), initiate / validate / IPN / history, gateway validation, idempotent processing | ⏳ In progress |
-| 7 | Super admin + Redis | dashboard stats, organizations, payments, audit logs, org status; Upstash caching with expiry + invalidation | Planned |
+| 6 | Subscriptions & SSLCommerz | plans, current subscription, effective-plan resolution (expiry), initiate / validate / IPN / history, gateway validation, idempotent processing | ✅ Done (2026-11-20) |
+| 7 | Super admin + Redis | dashboard stats, organizations, payments, audit logs, org status; Upstash caching with expiry + invalidation | ⏳ In progress |
 | 8 | API documentation | Swagger UI at `/api-docs` (OpenAPI YAML), Postman collection + environment, `docs/API.md` | Planned |
 | 9 | Deployment & final QA | Vercel serverless entry + `vercel.json`, production DB migrations, live verification, README + submission details | Planned |
 
@@ -21,7 +21,7 @@ Source of truth: `../REQUIREMENTS.md`. One phase at a time; each phase ends with
 | What | Needed for | Status |
 | --- | --- | --- |
 | Google OAuth Client ID (GCP) | `POST /auth/google` | ❌ Not provided. The endpoint is implemented and returns **503 "Google login is not configured"** until `GOOGLE_CLIENT_ID` is set. It is never faked. |
-| SSLCommerz sandbox Store ID / password | Phase 6 – payments | ❌ Not provided |
+| SSLCommerz sandbox Store ID / password | Payments | ⚠️ No own store yet. SSLCommerz's **public sandbox demo store** (`SSL_STORE_ID=testbox`, `SSL_STORE_PASSWORD=qwerty`, `SSL_IS_LIVE=false`) works and was used for the live checks. Use your own sandbox store for the submission if you have one. Without credentials, `/payments/initiate` returns 503. |
 | Upstash Redis REST URL / token | Phase 7 – caching | ❌ Not provided (caching will be skipped when unset) |
 | Production PostgreSQL | Phase 9 | ✅ Prisma Postgres (`db.prisma.io`) connected 2026-11-19 via `.env` `DATABASE_URL` (`sslmode=verify-full`): `init` migration applied with `migrate deploy`, seed run (SUPER_ADMIN + FREE/PRO), `/health` → database connected, admin login + `/auth/me` verified. Still to do: set the same `DATABASE_URL` on Vercel in Phase 9. Tests keep using the local `teamflow_test` DB. |
 | GitHub remote + Vercel project | Push / deployment | ❌ No remote configured (local commits only) |
@@ -29,6 +29,56 @@ Source of truth: `../REQUIREMENTS.md`. One phase at a time; each phase ends with
 ## Open questions
 
 - `PATCH /organizations/current/members/:memberId`: membership has no editable fields in §6.3. Decision: the owner activates or deactivates the member's access (`{ "isActive": false }`). No answer was given, so this was implemented as proposed. Easy to change if a different meaning is wanted.
+
+---
+
+## Phase 6 – Subscriptions & SSLCommerz payments ✅
+
+### Delivered – Phase 6
+
+- **Endpoints:**
+  - `GET /plans` (public, active plans)
+  - `GET /subscriptions/current` (owner): effective plan, current subscription, usage (members, active projects), and periods already bought in advance.
+  - `POST /payments/initiate` (owner)
+  - `POST /payments/validate`: SSLCommerz success/fail/cancel URL. A browser form post is redirected (303) to `FRONTEND_URL/payment/result?status=…`; a JSON call gets the standard envelope.
+  - `POST /payments/ipn`: SSLCommerz IPN.
+  - `GET /payments/history` (owner; pagination, `status` filter).
+- **Payment flow** (§12):
+  1. The owner picks a paid, active plan. FREE → 400; unknown or inactive → 404.
+  2. A PENDING subscription and a PENDING payment are created in one transaction. The transaction id is random and up to 30 characters.
+  3. An SSLCommerz session is opened outside the transaction and `gatewayUrl` is returned. If the gateway refuses, the payment becomes FAILED and the subscription CANCELLED (502).
+  4. On a callback or IPN, the **SSLCommerz validation API** is called with the `val_id`. Status (VALID/VALIDATED), transaction id, currency and amount must all match our record.
+  5. Only then, in one transaction: payment → SUCCESS (with the sanitized gateway response) and subscription → ACTIVE, for 30 days. If a PRO period is already running, the new one starts when it ends.
+- **Security:**
+  - A callback without `val_id` never activates anything.
+  - IPN: the `verify_sign` / `verify_key` md5 signature is checked as SSLCommerz specifies, using a timing-safe comparison.
+  - **Idempotency:** `updateMany … WHERE status <> 'SUCCESS'` lets exactly one callback activate. Repeated callbacks, IPN plus redirect, and parallel calls return `alreadyProcessed: true`.
+  - A forged FAILED/CANCELLED callback only closes a PENDING payment; a later gateway-verified success still activates it.
+  - Gateway secrets stay server-side; card numbers are never stored.
+  - Form-encoded bodies are accepted only on the two callback routes.
+- **Expiry:** limits always use the effective plan (ACTIVE, started, not ended). `GET /subscriptions/current` also marks ended subscriptions EXPIRED. The plan is never read from client data.
+- **Client:** `src/config/sslcommerz.ts` calls the official v4 endpoints that the official `sslcommerz-lts` package also uses, with native fetch, timeouts and typed responses. That package wasn't used because it returns network failures as if they were responses, always sends POST, and doesn't URL-encode parameters.
+
+### Verification – Phase 6
+
+- `bun run typecheck` ✅ · `bun run lint` ✅ · `bun run test` ✅ **140/140**. The 17 new tests cover:
+  - plans and the current subscription; expiry falls back to FREE
+  - initiate: success; FREE, inactive, unknown, member and bad input rejected; the gateway refusing
+  - successful verification, after which **PRO member limits apply**
+  - duplicate callbacks, sequential and **concurrent**: exactly one activation
+  - amount mismatch and INVALID_TRANSACTION → FAILED
+  - a success redirect without `val_id` → not activated
+  - failed and cancelled callbacks; unknown transaction → 404
+  - the browser redirect to the frontend
+  - extending a running period
+  - a signed IPN activates; tampered or unsigned IPN → 400
+  - payment history isolation; member → 403
+  - In these tests only the two outbound SSLCommerz HTTP calls are mocked.
+- **Live sandbox check** (built server, local DB, demo store `testbox`):
+  - `POST /payments/initiate` reached the **real** SSLCommerz sandbox and returned a real `sandbox.sslcommerz.com/EasyCheckOut/…` URL.
+  - A forged success callback with a fake `val_id` made our server ask the **real validation API**, which answered `INVALID_TRANSACTION`, so the payment → FAILED and the subscription → CANCELLED.
+  - A bare success redirect and a forged IPN were rejected.
+- **Not yet done:** completing a payment in the sandbox checkout page needs a browser, and the Chrome extension was not connected. See "Sandbox payment walkthrough" in README.md to do it in about 2 minutes.
 
 ---
 
