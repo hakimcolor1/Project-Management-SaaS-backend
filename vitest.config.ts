@@ -21,6 +21,11 @@ export default defineConfig({
       JWT_REFRESH_EXPIRES_IN: "7d",
       FRONTEND_URL: "http://localhost:3000",
       BACKEND_URL: "http://localhost:5000",
+      // Fake gateway credentials: tests mock the SSLCommerz HTTP calls and
+      // sign IPN payloads with this password.
+      SSL_STORE_ID: "teamflow-test-store",
+      SSL_STORE_PASSWORD: "teamflow-test-password",
+      SSL_IS_LIVE: "false",
     },
   },
 });
