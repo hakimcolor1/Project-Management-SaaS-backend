@@ -10,8 +10,8 @@ Source of truth: `../REQUIREMENTS.md`. One phase at a time; each phase ends with
 | 2 | Authentication & authorization | register, login, refresh-token rotation, logout, me, Google ID-token login; `authenticate` + `authorize` middlewares; auth rate limit; DB-backed integration tests | ✅ Done (2026-11-19) |
 | 3 | Organizations & members (+ audit log helper, plan limits) | create/current/update org; add (by existing email), list, update, remove members; organization-scope middleware; suspended-org handling; member plan limits | ✅ Done (2026-11-20) |
 | 4 | Projects | CRUD, pagination, search, status filter, soft delete, progress %, project plan limits, audit entries | ✅ Done (2026-11-20) |
-| 5 | Tasks | CRUD, assign, status workflow, member-permitted fields, filters, pagination, due-date + assignee validation, task limits, audit entries | ⏳ In progress |
-| 6 | Subscriptions & SSLCommerz | plans, current subscription, effective-plan resolution (expiry), initiate / validate / IPN / history, gateway validation, idempotent processing | Planned |
+| 5 | Tasks | CRUD, assign, status workflow, member-permitted fields, filters, pagination, due-date + assignee validation, task limits, audit entries | ✅ Done (2026-11-20) |
+| 6 | Subscriptions & SSLCommerz | plans, current subscription, effective-plan resolution (expiry), initiate / validate / IPN / history, gateway validation, idempotent processing | ⏳ In progress |
 | 7 | Super admin + Redis | dashboard stats, organizations, payments, audit logs, org status; Upstash caching with expiry + invalidation | Planned |
 | 8 | API documentation | Swagger UI at `/api-docs` (OpenAPI YAML), Postman collection + environment, `docs/API.md` | Planned |
 | 9 | Deployment & final QA | Vercel serverless entry + `vercel.json`, production DB migrations, live verification, README + submission details | Planned |
@@ -29,6 +29,47 @@ Source of truth: `../REQUIREMENTS.md`. One phase at a time; each phase ends with
 ## Open questions
 
 - `PATCH /organizations/current/members/:memberId`: membership has no editable fields in §6.3. Decision: the owner activates or deactivates the member's access (`{ "isActive": false }`). No answer was given, so this was implemented as proposed. Easy to change if a different meaning is wanted.
+
+---
+
+## Phase 5 – Tasks ✅
+
+### Delivered – Phase 5
+
+- **Endpoints** (`src/modules/tasks/`):
+  - `POST /projects/:projectId/tasks` (owner; can assign at creation)
+  - `GET /projects/:projectId/tasks` (owner/member): pagination, `status`, `priority`, `assignedTo` = user id / `me` / `unassigned`, `search` on the title, `sortBy` = createdAt / dueDate / priority / title.
+  - `GET /tasks/:taskId`
+  - `PATCH /tasks/:taskId`
+  - `PATCH /tasks/:taskId/status`
+  - `PATCH /tasks/:taskId/assign` (owner; `null` unassigns)
+  - `DELETE /tasks/:taskId` (owner; soft delete)
+- **Permissions:**
+  - The owner may edit title, description, priority and due date.
+  - A member may edit only the **description**, and only of a task **assigned to them**.
+  - The assignee and the project can never be changed through `PATCH /tasks/:id`: the strict schema rejects them with 422, and assignment has its own owner-only endpoint.
+- **Status workflow:** members follow TODO → IN_PROGRESS → REVIEW → COMPLETED. They can step back (IN_PROGRESS → TODO, REVIEW → IN_PROGRESS) and reopen a task (COMPLETED → IN_PROGRESS). The owner may set any status. Setting the current status again → 400.
+- **Validation:**
+  - The assignee must be an **active member of the same organization** (400, with the `assignedToId` field named).
+  - The due date can't be in the past or after the project's due date (422).
+  - Tasks can't be added to an ARCHIVED project.
+  - Task limit per project: FREE 50, PRO 1000, checked under the organization row lock.
+- **Isolation:** tasks are always looked up by id **and** the caller's organization, and must belong to a non-deleted project. Anything else → 404.
+- **Audit:** TASK_CREATED / TASK_UPDATED (fields) / TASK_STATUS_CHANGED (from → to) / TASK_ASSIGNED (from → to) / TASK_DELETED.
+
+### Verification – Phase 5
+
+`bun run typecheck` ✅ · `bun run lint` ✅ · `bun run test` ✅ **123/123**. The 18 new tests cover:
+
+- create and assign; member create → 403; foreign or deactivated assignee → 400
+- due-date rules; archived, deleted or foreign projects; the 50-task FREE limit
+- list filters, sorting and pagination; another organization's project → 404
+- get and isolation
+- owner update; member limited to the description of their own tasks; protected fields → 422
+- full workflow to COMPLETED, with **project progress updating to 50%** and the audit trail
+- invalid transitions, same status, and someone else's task
+- owner override; assign/reassign/unassign with the audit trail; non-member assignee; member assigning → 403
+- soft delete removes the task from progress; member and cross-organization deletes
 
 ---
 
