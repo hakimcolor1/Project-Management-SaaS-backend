@@ -2,12 +2,12 @@
 
 Multi-tenant REST API for TeamFlow: organizations manage their members, projects, tasks and subscriptions in isolated workspaces.
 
-> **Status:** Phase 1 of 9 complete (project setup, database schema, common utilities). See [DEVELOPMENT_PROGRESS.md](DEVELOPMENT_PROGRESS.md).
+> **Status:** Phase 2 of 9 complete (project setup, database, authentication & role-based authorization). See [DEVELOPMENT_PROGRESS.md](DEVELOPMENT_PROGRESS.md).
 
 ## Tech stack
 
 | Concern | Choice |
-|---|---|
+| --- | --- |
 | Runtime / language | Node.js 24, TypeScript 6 (strict, ESM) |
 | Package manager | Bun |
 | Framework | Express 5 |
@@ -41,7 +41,7 @@ All variables are validated at startup (`src/config/env.ts`); the app refuses to
 ## Scripts
 
 | Script | Purpose |
-|---|---|
+| --- | --- |
 | `bun run dev` | Start the dev server with reload (tsx) |
 | `bun run build` | Generate the Prisma client and bundle to `dist/` (tsup) |
 | `bun run start` | Run the production build |
@@ -50,6 +50,33 @@ All variables are validated at startup (`src/config/env.ts`); the app refuses to
 | `bun run db:migrate` | Create/apply migrations in development |
 | `bun run db:deploy` | Apply migrations in production (`prisma migrate deploy`) |
 | `bun run db:seed` | Seed the SUPER_ADMIN account and subscription plans |
+
+### Running tests
+
+Tests run against a separate database, `teamflow_test`, which `docker compose up -d` creates. Vitest migrates it automatically before each run. Tests empty its tables, so they refuse to run against any database whose name does not end in `_test`. Use `TEST_DATABASE_URL` to point them at another test database. Run them with `bun run test`; plain `bun test` starts Bun's own runner instead of Vitest.
+
+## Authentication
+
+| Endpoint | Auth | Purpose |
+| --- | --- | --- |
+| `POST /api/v1/auth/register` | – | Create a TEAM_OWNER account (`name`, `email`, `password`) |
+| `POST /api/v1/auth/login` | – | Email + password → access & refresh tokens |
+| `POST /api/v1/auth/google` | – | Google ID token (`idToken`) → tokens. Needs `GOOGLE_CLIENT_ID`. |
+| `POST /api/v1/auth/refresh-token` | refresh token | Rotate the refresh token, issue a new access token |
+| `POST /api/v1/auth/logout` | refresh token | Revoke the refresh token and clear cookies |
+| `GET /api/v1/auth/me` | access token | Current user and their organization |
+
+How the tokens work:
+
+- **Access token** (15 min). Send it as `Authorization: Bearer <token>`, or let the browser send the `accessToken` HTTP-only cookie.
+- **Refresh token** (7 days). It is kept in the `refreshToken` HTTP-only cookie, which is only sent to `/api/v1/auth`. API clients such as Postman can send it as `{ "refreshToken": "…" }` instead.
+  - Each refresh revokes the old token and issues a new one.
+  - Reusing a revoked token signs the user out of every session.
+  - Only a SHA-256 hash of each refresh token is stored.
+- **Response body.** Login responses also return both tokens in the body, for API clients. Browser apps should rely on the cookies and never store tokens in `localStorage`.
+- **Cookie settings in production.** Cookies are `Secure` and `SameSite=None` because the frontend and API run on different domains.
+
+Roles: `SUPER_ADMIN` (seed only), `TEAM_OWNER` (every public sign-up), `TEAM_MEMBER` (added by an owner). Routes are protected with `authenticate` and `authorize(...roles)`. The role is re-read from the database on every request.
 
 ## Demo admin account
 
@@ -68,12 +95,13 @@ All variables are validated at startup (`src/config/env.ts`); the app refuses to
 
 ## Project structure
 
-```
-prisma/          schema.prisma (generator + datasource), enums.prisma, models/*.prisma, migrations/, seed.ts
-src/config/      env validation, Prisma client
-src/middlewares/ validation, error handling, 404
-src/modules/     one folder per feature (route / controller / service / validation)
-src/utils/       response, errors, pagination, password, JWT helpers
+```text
+prisma/schema/   schema.prisma (generator + datasource), <service>.prisma models, enums/<service>.enum.prisma
+prisma/          migrations/, seed.ts
+src/config/      env validation, Prisma client, Google ID-token verification
+src/middlewares/ authenticate, authorize, validate, rate limits, error handling, 404
+src/modules/     one folder per feature (route / controller / service / validation / interface)
+src/utils/       response, errors, pagination, password, JWT, cookie helpers
 src/routes/      mounts module routers under /api/v1
-tests/           Vitest + Supertest
+tests/           Vitest + Supertest (helpers/, setup/)
 ```
