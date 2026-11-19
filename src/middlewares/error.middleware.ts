@@ -118,7 +118,13 @@ export const errorHandler: ErrorRequestHandler = (error, req, res, next) => {
   const normalized = normalizeError(error);
 
   if (normalized.statusCode >= 500 && env.NODE_ENV !== "test") {
-    console.error(`[error] ${req.method} ${req.originalUrl}`, error);
+    if (error instanceof AppError) {
+      // Expected server-side condition (e.g. a feature not configured): one line, no stack.
+      console.warn(`[warn] ${req.method} ${req.originalUrl} → ${normalized.statusCode} ${error.message}`);
+    } else {
+      // Unexpected failure: full details for debugging, never sent to the client.
+      console.error(`[error] ${req.method} ${req.originalUrl}`, error);
+    }
   }
 
   res.status(normalized.statusCode).json({
