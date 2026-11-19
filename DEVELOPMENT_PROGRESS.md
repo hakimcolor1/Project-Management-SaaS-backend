@@ -12,8 +12,8 @@ Source of truth: `../REQUIREMENTS.md`. One phase at a time; each phase ends with
 | 4 | Projects | CRUD, pagination, search, status filter, soft delete, progress %, project plan limits, audit entries | ✅ Done (2026-11-20) |
 | 5 | Tasks | CRUD, assign, status workflow, member-permitted fields, filters, pagination, due-date + assignee validation, task limits, audit entries | ✅ Done (2026-11-20) |
 | 6 | Subscriptions & SSLCommerz | plans, current subscription, effective-plan resolution (expiry), initiate / validate / IPN / history, gateway validation, idempotent processing | ✅ Done (2026-11-20) |
-| 7 | Super admin + Redis | dashboard stats, organizations, payments, audit logs, org status; Upstash caching with expiry + invalidation | ⏳ In progress |
-| 8 | API documentation | Swagger UI at `/api-docs` (OpenAPI YAML), Postman collection + environment, `docs/API.md` | Planned |
+| 7 | Super admin + Redis | dashboard stats, organizations, payments, audit logs, org status; Upstash caching with expiry + invalidation | ✅ Done (2026-11-20) |
+| 8 | API documentation | Swagger UI at `/api-docs` (OpenAPI YAML), Postman collection + environment, `docs/API.md` | ⏳ In progress |
 | 9 | Deployment & final QA | Vercel serverless entry + `vercel.json`, production DB migrations, live verification, README + submission details | Planned |
 
 ## Missing configuration
@@ -29,6 +29,47 @@ Source of truth: `../REQUIREMENTS.md`. One phase at a time; each phase ends with
 ## Open questions
 
 - `PATCH /organizations/current/members/:memberId`: membership has no editable fields in §6.3. Decision: the owner activates or deactivates the member's access (`{ "isActive": false }`). No answer was given, so this was implemented as proposed. Easy to change if a different meaning is wanted.
+
+---
+
+## Phase 7 – Super admin APIs & Redis caching ✅
+
+### Delivered – Phase 7
+
+- **Admin endpoints** (`src/modules/admin/`). All are protected by `authenticate` + `authorize("SUPER_ADMIN")` at router level.
+  - `GET /admin/dashboard`: from database aggregations, never hard-coded.
+    - users: total, active/inactive, by role, new in the last 30 days
+    - organizations: by status, new in the last 30 days
+    - project and task totals (including completed tasks); active paid subscriptions
+    - payments by status; total revenue and revenue in the last 30 days
+  - `GET /admin/organizations`: pagination, `search` on name/slug, `status` filter. Each row has the owner, member/project counts and the current plan; the plan for a whole page comes from one query.
+  - `PATCH /admin/organizations/:id/status`: `{ status, reason? }` to suspend or reactivate, audited. Suspension immediately blocks the organization's tenant routes (403).
+  - Two endpoints beyond the §13 list, added to cover the §5.1 permissions:
+    - `GET /admin/users` (view all users)
+    - `PATCH /admin/plans/:planId` (manage subscription plans). FREE must stay free and active; paid plans need a price > 0.
+  - `GET /admin/payments`: all payments, with `status` and `organizationId` filters.
+  - `GET /admin/audit-logs`: filters `action` (case-insensitive), `entity`, `organizationId`, `userId`.
+- **Redis** (`src/config/redis.ts`, `src/utils/cache.ts`): Upstash REST client, optional. Cache-aside, and any Redis error falls back to PostgreSQL.
+  - `GET /plans` is cached for 10 minutes and **invalidated** whenever an admin updates a plan.
+  - The admin dashboard is cached for 60 seconds and invalidated when an organization's status changes.
+  - **Never cached:** subscriptions, payments and plan-limit checks. Redis is never the source of truth for them.
+
+### Verification – Phase 7
+
+`bun run typecheck` ✅ · `bun run lint` ✅ · `bun run test` ✅ **155/155**. The 15 new tests cover:
+
+- **Access control:** 401 without a token; 403 for TEAM_OWNER and TEAM_MEMBER on every admin endpoint.
+- **Dashboard:** statistics match the seeded data (revenue `2000.50`).
+- **Organizations:** list with plan, search and status filter.
+- **Suspend/reactivate:** the tenant API is blocked, then allowed again; the audit trail records who did it and why; same status → 400; unknown id → 404; bad input → 422.
+- **Users, payments, audit logs:** filters work, and no passwords are exposed.
+- **Plans:** an update shows up in `GET /plans`; the FREE and paid-price rules hold.
+- **Cache** (in-memory fake Redis):
+  - a hit is served from the cache with a 600 s TTL
+  - an admin plan update invalidates it
+  - **Redis down → the database is used**
+  - subscriptions and payments **never** touch Redis
+  - the dashboard is cached with a 60 s TTL
 
 ---
 
