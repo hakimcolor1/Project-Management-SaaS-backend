@@ -89,6 +89,58 @@ export const assertActiveProjectLimit = async (
   }
 };
 
+// ── Plans & current subscription (read APIs) ────────────────────────
+
+/** Public plan fields; money is returned as a 2-decimal string. */
+export const toPlanView = (plan: SubscriptionPlan) => ({
+  id: plan.id,
+  name: plan.name,
+  price: plan.price.toFixed(2),
+  currency: plan.currency,
+  durationDays: plan.durationDays,
+  maxMembers: plan.maxMembers,
+  maxProjects: plan.maxProjects,
+  maxTasksPerProject: plan.maxTasksPerProject,
+});
+
+export const listActivePlans = async () => {
+  const plans = await prisma.subscriptionPlan.findMany({ where: { isActive: true }, orderBy: { price: "asc" } });
+  return plans.map(toPlanView);
+};
+
+/** Flags ACTIVE subscriptions whose end date has passed as EXPIRED (bookkeeping only – limits never relied on it). */
+export const expireEndedSubscriptions = (organizationId: string, db: Db = prisma) =>
+  db.subscription.updateMany({
+    where: { organizationId, status: "ACTIVE", endDate: { lte: new Date() } },
+    data: { status: "EXPIRED" },
+  });
+
+export const getCurrentSubscription = async (organizationId: string) => {
+  await expireEndedSubscriptions(organizationId);
+  const now = new Date();
+
+  const [{ plan, subscription }, members, activeProjects, upcoming] = await Promise.all([
+    getEffectivePlan(organizationId),
+    prisma.organizationMember.count({ where: { organizationId } }),
+    prisma.project.count({ where: { organizationId, deletedAt: null, status: "ACTIVE" } }),
+    // Paid periods bought in advance start when the current one ends.
+    prisma.subscription.findMany({
+      where: { organizationId, status: "ACTIVE", startDate: { gt: now } },
+      orderBy: { startDate: "asc" },
+      select: { id: true, startDate: true, endDate: true, plan: { select: { name: true } } },
+    }),
+  ]);
+
+  return {
+    plan: toPlanView(plan),
+    subscription: subscription
+      ? { id: subscription.id, status: subscription.status, startDate: subscription.startDate, endDate: subscription.endDate }
+      : null,
+    usage: { members, activeProjects },
+    upcoming: upcoming.map(({ plan: upcomingPlan, ...rest }) => ({ ...rest, plan: upcomingPlan.name })),
+  };
+};
+
 export const assertTaskLimit = async (db: Db, organizationId: string, projectId: string): Promise<void> => {
   const { plan } = await getEffectivePlan(organizationId, db);
   if (plan.maxTasksPerProject === null) return;
