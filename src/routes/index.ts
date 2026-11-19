@@ -3,6 +3,8 @@ import { authRoutes } from "../modules/auth/auth.route.js";
 import { healthRoutes } from "../modules/health/health.route.js";
 import { organizationRoutes } from "../modules/organizations/organization.route.js";
 import { projectRoutes } from "../modules/projects/project.route.js";
+import { paymentRoutes } from "../modules/payments/payment.route.js";
+import { planRoutes, subscriptionRoutes } from "../modules/subscriptions/subscription.route.js";
 import { projectTaskRoutes, taskRoutes } from "../modules/tasks/task.route.js";
 
 /** All versioned API routes, mounted under /api/v1 in app.ts. */
@@ -16,6 +18,9 @@ const moduleRoutes: { path: string; router: Router }[] = [
   { path: "/projects/:projectId/tasks", router: projectTaskRoutes },
   { path: "/projects", router: projectRoutes },
   { path: "/tasks", router: taskRoutes },
+  { path: "/plans", router: planRoutes },
+  { path: "/subscriptions", router: subscriptionRoutes },
+  { path: "/payments", router: paymentRoutes },
   // Further modules (organizations, projects, …) are added phase by phase.
 ];
 
