@@ -8,8 +8,8 @@ Source of truth: `../REQUIREMENTS.md`. One phase at a time; each phase ends with
 | --- | --- | --- | --- |
 | 1 | Project initialization & database | Bun/TS/Express setup, Prisma schema (10 models) + migration, seed, env validation, error handling, response/pagination/JWT/password utils, health check | ✅ Done (2026-11-19) |
 | 2 | Authentication & authorization | register, login, refresh-token rotation, logout, me, Google ID-token login; `authenticate` + `authorize` middlewares; auth rate limit; DB-backed integration tests | ✅ Done (2026-11-19) |
-| 3 | Organizations & members | create/current/update org; add (by existing email), list, update, remove members; organization-scope middleware; suspended-org handling; member plan limits | ⏳ Next – awaiting approval |
-| 4 | Projects + audit log | CRUD, pagination, search, status filter, soft delete, progress %, project plan limits; reusable audit-log service | Planned |
+| 3 | Organizations & members (+ audit log helper, plan limits) | create/current/update org; add (by existing email), list, update, remove members; organization-scope middleware; suspended-org handling; member plan limits | ✅ Done (2026-11-20) |
+| 4 | Projects | CRUD, pagination, search, status filter, soft delete, progress %, project plan limits, audit entries | ⏳ In progress |
 | 5 | Tasks | CRUD, assign, status workflow, member-permitted fields, filters, pagination, due-date + assignee validation, task limits, audit entries | Planned |
 | 6 | Subscriptions & SSLCommerz | plans, current subscription, effective-plan resolution (expiry), initiate / validate / IPN / history, gateway validation, idempotent processing | Planned |
 | 7 | Super admin + Redis | dashboard stats, organizations, payments, audit logs, org status; Upstash caching with expiry + invalidation | Planned |
@@ -28,7 +28,47 @@ Source of truth: `../REQUIREMENTS.md`. One phase at a time; each phase ends with
 
 ## Open questions
 
-- `PATCH /organizations/current/members/:memberId`: membership has no editable fields in §6.3. Proposal: let the owner activate or deactivate the member's access. Confirm in Phase 3.
+- `PATCH /organizations/current/members/:memberId`: membership has no editable fields in §6.3. Decision: the owner activates or deactivates the member's access (`{ "isActive": false }`). No answer was given, so this was implemented as proposed. Easy to change if a different meaning is wanted.
+
+---
+
+## Phase 3 – Organizations & members ✅
+
+### Delivered – Phase 3
+
+- **Endpoints** (`src/modules/organizations/`):
+  - `POST /organizations` (TEAM_OWNER): in one transaction, creates the organization with a unique slug, the owner's membership and a FREE subscription.
+  - `GET /organizations/current` (owner/member; works even when suspended): plan limits, member/project counts and `isOwner`.
+  - `PATCH /organizations/current` (owner): name and description.
+  - `POST /organizations/current/members` (owner): add an existing account by email. The account becomes TEAM_MEMBER.
+  - `GET /organizations/current/members` (owner/member): pagination and search by name or email.
+  - `PATCH /organizations/current/members/:memberId` (owner): `{ isActive }`. Deactivation also revokes the member's refresh tokens.
+  - `DELETE /organizations/current/members/:memberId` (owner): the member's tasks become unassigned and their role returns to TEAM_OWNER.
+- **Organization scope** (`organization.middleware.ts`):
+  - The organization is resolved from the caller's membership, never from a client-supplied id.
+  - Suspended organizations are blocked (403), except for `GET /current`.
+  - `organizationOwnerAccess()` combines the role check with the organization-ownership check.
+  - Another organization's ids return 404, so their existence isn't revealed.
+- **Plans** (`subscriptions/subscription.service.ts`):
+  - The effective plan is the best ACTIVE subscription that has started and not ended, otherwise FREE.
+  - An expired PRO subscription never counts, even while its status is still ACTIVE.
+  - Limit checks run after `SELECT … FOR UPDATE` on the organization row, so concurrent requests cannot exceed a limit.
+- **Audit log helper** (`utils/audit-log.ts`): written inside the same transaction as the change. Records ORGANIZATION_CREATED/UPDATED and MEMBER_ADDED/UPDATED/REMOVED.
+- **Rules enforced:** one owned organization per user; one organization per user; admin, deactivated and foreign-organization accounts can't be added; the owner can't remove or deactivate themselves.
+
+### Verification – Phase 3
+
+`bun run typecheck` ✅ · `bun run lint` ✅ · `bun run test` ✅ **92/92**. The 23 new organization tests cover:
+- create, duplicate (409), and the wrong role or no login (403/401)
+- current organization for owner and member, no organization (404), suspended organization
+- profile update, member and empty-body rejections
+- adding a member: success, unknown email (404), duplicate or foreign membership (409), admin (400)
+- the FREE limit of 5; **three concurrent adds for one free slot give exactly one success**
+- PRO limits while active and FREE limits once it expires
+- pagination and search; deactivation (sessions revoked, login blocked)
+- the owner can't be changed or removed
+- removal unassigns tasks and leaves the user with no organization access
+- cross-organization ids → 404
 
 ---
 
