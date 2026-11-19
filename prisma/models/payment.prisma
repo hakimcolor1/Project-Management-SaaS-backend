@@ -1,0 +1,23 @@
+model Payment {
+  id              String         @id @default(uuid(7)) @db.Uuid
+  organizationId  String         @db.Uuid
+  subscriptionId  String         @db.Uuid
+  transactionId   String         @unique @db.VarChar(64)
+  amount          Decimal        @db.Decimal(10, 2)
+  currency        String         @default("BDT") @db.VarChar(3)
+  paymentGateway  PaymentGateway @default(SSLCOMMERZ)
+  status          PaymentStatus  @default(PENDING)
+  /// Raw gateway validation response (no secrets).
+  gatewayResponse Json?
+  paidAt          DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, createdAt])
+  @@index([subscriptionId])
+  @@index([status, createdAt])
+  @@map("payments")
+}

@@ -1,0 +1,39 @@
+model Organization {
+  id          String             @id @default(uuid(7)) @db.Uuid
+  name        String             @db.VarChar(120)
+  slug        String             @unique @db.VarChar(140)
+  description String?            @db.VarChar(1000)
+  /// Unique: a user can own at most one organization (simplified version).
+  ownerId     String             @unique @db.Uuid
+  status      OrganizationStatus @default(ACTIVE)
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  deletedAt   DateTime?
+
+  owner         User                 @relation("OrganizationOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  members       OrganizationMember[]
+  projects      Project[]
+  tasks         Task[]
+  subscriptions Subscription[]
+  payments      Payment[]
+  auditLogs     AuditLog[]
+
+  @@index([status, deletedAt])
+  @@index([createdAt])
+  @@map("organizations")
+}
+
+model OrganizationMember {
+  id             String   @id @default(uuid(7)) @db.Uuid
+  organizationId String   @db.Uuid
+  /// Unique: a user belongs to at most one organization, which is what
+  /// `/organizations/current` resolves to (simplified version).
+  userId         String   @unique @db.Uuid
+  joinedAt       DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@map("organization_members")
+}
