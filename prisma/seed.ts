@@ -13,6 +13,7 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { z } from "zod";
 import { PrismaClient } from "../src/generated/prisma/client.js";
 import { UserRole } from "../src/generated/prisma/enums.js";
+import { DEFAULT_PLANS } from "../src/modules/subscriptions/subscription.constant.js";
 import { hashPassword, strongPasswordSchema } from "../src/utils/password.js";
 
 try {
@@ -26,27 +27,6 @@ const seedEnvSchema = z.object({
   DEMO_ADMIN_EMAIL: z.string().trim().toLowerCase().pipe(z.email()),
   DEMO_ADMIN_PASSWORD: strongPasswordSchema,
 });
-
-const PLANS = [
-  {
-    name: "FREE",
-    price: "0.00",
-    currency: "BDT",
-    durationDays: null, // never expires
-    maxMembers: 5,
-    maxProjects: 2,
-    maxTasksPerProject: 50,
-  },
-  {
-    name: "PRO",
-    price: "1500.00",
-    currency: "BDT",
-    durationDays: 30,
-    maxMembers: 25,
-    maxProjects: null, // unlimited
-    maxTasksPerProject: 1000,
-  },
-] as const;
 
 const parsed = seedEnvSchema.safeParse(process.env);
 if (!parsed.success) {
@@ -90,7 +70,7 @@ const seedSuperAdmin = async (): Promise<void> => {
 };
 
 const seedPlans = async (): Promise<void> => {
-  for (const plan of PLANS) {
+  for (const plan of DEFAULT_PLANS) {
     const existing = await prisma.subscriptionPlan.findUnique({
       where: { name: plan.name },
       select: { id: true },
