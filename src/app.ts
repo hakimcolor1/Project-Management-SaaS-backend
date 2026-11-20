@@ -6,6 +6,7 @@ import { env, isProduction } from "./config/env.js";
 import { errorHandler } from "./middlewares/error.middleware.js";
 import { notFound } from "./middlewares/not-found.middleware.js";
 import { apiRateLimiter } from "./middlewares/rate-limit.middleware.js";
+import { docsRoutes } from "./modules/docs/docs.route.js";
 import { apiRouter } from "./routes/index.js";
 import { sendSuccess } from "./utils/response.js";
 
@@ -39,10 +40,11 @@ app.use("/api", apiRateLimiter);
 app.get("/", (_req, res) => {
   sendSuccess(res, {
     message: "Welcome to the TeamFlow API",
-    data: { name: "TeamFlow API", version: "v1", health: "/api/v1/health" },
+    data: { name: "TeamFlow API", version: "v1", health: "/api/v1/health", docs: "/api-docs" },
   });
 });
 
+app.use("/api-docs", docsRoutes);
 app.use("/api/v1", apiRouter);
 
 // ── Fallbacks (must stay last) ───────────────────────────────────────

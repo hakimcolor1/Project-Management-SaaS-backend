@@ -13,8 +13,8 @@ Source of truth: `../REQUIREMENTS.md`. One phase at a time; each phase ends with
 | 5 | Tasks | CRUD, assign, status workflow, member-permitted fields, filters, pagination, due-date + assignee validation, task limits, audit entries | ✅ Done (2026-11-20) |
 | 6 | Subscriptions & SSLCommerz | plans, current subscription, effective-plan resolution (expiry), initiate / validate / IPN / history, gateway validation, idempotent processing | ✅ Done (2026-11-20) |
 | 7 | Super admin + Redis | dashboard stats, organizations, payments, audit logs, org status; Upstash caching with expiry + invalidation | ✅ Done (2026-11-20) |
-| 8 | API documentation | Swagger UI at `/api-docs` (OpenAPI YAML), Postman collection + environment, `docs/API.md` | ⏳ In progress |
-| 9 | Deployment & final QA | Vercel serverless entry + `vercel.json`, production DB migrations, live verification, README + submission details | Planned |
+| 8 | API documentation | Swagger UI at `/api-docs` (OpenAPI YAML), Postman collection + environment, `docs/API.md` | ✅ Done (2026-11-20) |
+| 9 | Deployment & final QA | Vercel serverless entry + `vercel.json`, production DB migrations, live verification, README + submission details | ⏳ In progress |
 
 ## Missing configuration
 
@@ -29,6 +29,40 @@ Source of truth: `../REQUIREMENTS.md`. One phase at a time; each phase ends with
 ## Open questions
 
 - `PATCH /organizations/current/members/:memberId`: membership has no editable fields in §6.3. Decision: the owner activates or deactivates the member's access (`{ "isActive": false }`). No answer was given, so this was implemented as proposed. Easy to change if a different meaning is wanted.
+
+---
+
+## Phase 8 – API documentation ✅
+
+### Delivered – Phase 8
+
+- **OpenAPI 3.0** (`docs/api-documentation.yaml`):
+  - All 39 operations, with request schemas, response schemas and examples.
+  - Bearer and cookie authentication.
+  - Shared error responses for 400/401/403/404/409/422/429/503.
+  - Role notes per endpoint.
+  - Validated with Redocly CLI: **valid** (remaining warnings are optional `operationId`s).
+- **Swagger UI at `/api-docs`:**
+  - Pinned `swagger-ui-dist@5.34.1` from jsDelivr with **Subresource Integrity** hashes. The spec is served at `/api-docs/openapi.yaml`.
+  - It has its own strict CSP: no inline scripts.
+  - `swagger-ui-express` was avoided because its static files are unreliable on serverless.
+- **Postman** (`docs/TeamFlow.postman_collection.json` + `TeamFlow.postman_environment.json`):
+  - 53 requests in 9 folders, using the required variables `baseUrl`, `accessToken`, `refreshToken`, `organizationId`, `projectId` and `taskId`, plus helpers.
+  - Test scripts save tokens and ids automatically.
+  - Member and admin logins exercise role checks, with 403 checks included.
+- **`docs/API.md`:** authentication, role/permission matrix, plan limits, conventions, every endpoint, request/response examples, payment flow, error codes, Postman usage.
+- **README** rewritten: features, setup, environment table, tests, demo admin, sandbox payment walkthrough, structure.
+
+### Verification – Phase 8
+
+- `bun run test` ✅ **158/158**. 3 new docs tests check that:
+  - Swagger UI is served with CSP and SRI
+  - the documented operations **equal** the implemented list (two-way check)
+  - **every documented endpoint is a real route**
+- **Newman run of the Postman collection** against the built server (production mode, local DB, real SSLCommerz sandbox): **53/53 requests, 53/53 assertions passed**. It covers auth, organizations, members, projects, tasks with the member workflow, plans, payment initiation, admin and cleanup.
+- Two collection bugs were found and fixed through these runs:
+  - Postman reserves the global name `data`, so the token scripts failed. Renamed.
+  - Repeated runs hit the auth rate limit (expected behaviour). This is now documented.
 
 ---
 

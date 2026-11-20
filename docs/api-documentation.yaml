@@ -1,0 +1,1387 @@
+openapi: 3.0.3
+info:
+  title: TeamFlow API
+  version: 1.0.0
+  license:
+    name: UNLICENSED (assignment project)
+    url: https://opensource.org/licenses
+  description: |
+    Multi-tenant Project Management SaaS REST API (B7A6 – Assignment 8).
+
+    **Authentication** – log in with `POST /auth/login` (or `/auth/google`). The access token
+    (15 min) is returned in the body and set as the HTTP-only `accessToken` cookie. Send it as
+    `Authorization: Bearer <token>` (click **Authorize**) or rely on the cookie. Renew it with
+    `POST /auth/refresh-token` – refresh tokens rotate on every use.
+
+    **Roles** – `SUPER_ADMIN` (seeded, `/admin/*`), `TEAM_OWNER` (every public sign-up; manages
+    their organization), `TEAM_MEMBER` (added by an owner; works on assigned tasks).
+
+    **Tenancy** – the organization is always resolved from the caller's membership. IDs that
+    belong to another organization return `404`.
+
+    Every response uses the envelope `{ success, message, data }` (lists add `meta`), and every
+    error uses `{ success: false, message, errors[] }`.
+servers:
+  - url: /api/v1
+    description: This server
+tags:
+  - name: Health
+    description: Liveness and database connectivity.
+  - name: Auth
+    description: Registration, login (password or Google), token refresh, logout, current user.
+  - name: Organizations
+    description: The caller's organization (one per user).
+  - name: Members
+    description: Team member management (owner adds existing accounts by email).
+  - name: Projects
+    description: Organization projects with progress, search, filters and soft delete.
+  - name: Tasks
+    description: Project tasks, assignment and the status workflow.
+  - name: Subscriptions
+    description: Plans and the organization's effective subscription.
+  - name: Payments
+    description: SSLCommerz payments, gateway callbacks and history.
+  - name: Admin
+    description: Platform administration (SUPER_ADMIN only).
+security:
+  - bearerAuth: []
+  - cookieAuth: []
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: API and database health
+      security: []
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Success"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          status: { type: string, example: ok }
+                          database: { type: string, example: connected }
+                          environment: { type: string, example: production }
+                          uptimeSeconds: { type: integer, example: 42 }
+                          timestamp: { type: string, format: date-time }
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  # ───────────────────────────── Auth ─────────────────────────────
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Register (always creates a TEAM_OWNER)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name, email, password]
+              properties:
+                name: { type: string, minLength: 2, maxLength: 100, example: John Doe }
+                email: { type: string, format: email, example: john@example.com }
+                password:
+                  type: string
+                  minLength: 8
+                  description: 8+ characters (max 72 bytes) with upper-case, lower-case and a number.
+                  example: SecurePassword123
+      responses:
+        "201":
+          description: Registered
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Success"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          user: { $ref: "#/components/schemas/User" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Log in with email and password
+      description: Sets the `accessToken` and `refreshToken` HTTP-only cookies and also returns both tokens.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [email, password]
+              properties:
+                email: { type: string, format: email, example: john@example.com }
+                password: { type: string, example: SecurePassword123 }
+      responses:
+        "200": { $ref: "#/components/responses/AuthSuccess" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  /auth/google:
+    post:
+      tags: [Auth]
+      summary: Log in with a Google ID token
+      description: |
+        The ID token (from Google Identity Services) is verified on the server: signature, expiry,
+        issuer and audience (`GOOGLE_CLIENT_ID`). Only claims from the verified token are used.
+        New emails become TEAM_OWNER accounts; an existing account is linked by email. Returns
+        `503` when Google login is not configured.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [idToken]
+              properties:
+                idToken: { type: string, example: eyJhbGciOiJSUzI1NiIs... }
+      responses:
+        "200": { $ref: "#/components/responses/AuthSuccess" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /auth/refresh-token:
+    post:
+      tags: [Auth]
+      summary: Rotate the refresh token and issue a new access token
+      description: |
+        Uses the `refreshToken` cookie, or `refreshToken` in the body for API clients. The presented
+        token is revoked. Re-using a revoked token revokes every session of that user.
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RefreshTokenBody" }
+      responses:
+        "200":
+          description: New tokens
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Success"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/AuthTokens" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Revoke the refresh token and clear auth cookies
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RefreshTokenBody" }
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Current user with their organization
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Success"
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: "#/components/schemas/User"
+                          - type: object
+                            properties:
+                              organization:
+                                nullable: true
+                                type: object
+                                properties:
+                                  id: { type: string, format: uuid }
+                                  name: { type: string }
+                                  slug: { type: string }
+                                  status: { $ref: "#/components/schemas/OrganizationStatus" }
+                                  isOwner: { type: boolean }
+                                  joinedAt: { type: string, format: date-time }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  # ─────────────────────────── Organizations ───────────────────────────
+  /organizations:
+    post:
+      tags: [Organizations]
+      summary: Create an organization (TEAM_OWNER, one per user)
+      description: Creates the organization, the owner's membership and a FREE subscription.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name]
+              properties:
+                name: { type: string, minLength: 2, maxLength: 120, example: Acme Software }
+                description: { type: string, maxLength: 1000, example: Product team workspace }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Success"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Organization" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /organizations/current:
+    get:
+      tags: [Organizations]
+      summary: The caller's organization (owner or member; also when suspended)
+      responses:
+        "200":
+          description: Organization details
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Success"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/OrganizationDetails" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [Organizations]
+      summary: Update the organization profile (owner)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                name: { type: string, minLength: 2, maxLength: 120 }
+                description: { type: string, maxLength: 1000, nullable: true }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Success"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Organization" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /organizations/current/members:
+    post:
+      tags: [Members]
+      summary: Add an existing account by email (owner)
+      description: The account becomes a TEAM_MEMBER. Enforces the plan's member limit.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [email]
+              properties:
+                email: { type: string, format: email, example: dev@example.com }
+      responses:
+        "201":
+          description: Member added
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Success"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Member" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { description: "Not the owner, or plan member limit reached", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+    get:
+      tags: [Members]
+      summary: List members (owner or member)
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Search"
+      responses:
+        "200":
+          description: Members
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessList"
+                  - type: object
+                    properties:
+                      data: { type: array, items: { $ref: "#/components/schemas/Member" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /organizations/current/members/{memberId}:
+    parameters:
+      - $ref: "#/components/parameters/MemberId"
+    patch:
+      tags: [Members]
+      summary: Activate or deactivate a member's access (owner)
+      description: Deactivation blocks login and revokes the member's sessions. The owner cannot be changed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [isActive]
+              properties:
+                isActive: { type: boolean, example: false }
+      responses:
+        "200":
+          description: Updated member
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Success"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Member" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+    delete:
+      tags: [Members]
+      summary: Remove a member (owner)
+      description: Their tasks are unassigned and their role returns to TEAM_OWNER. The owner cannot be removed.
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ───────────────────────────── Projects ─────────────────────────────
+  /projects:
+    post:
+      tags: [Projects]
+      summary: Create a project (owner)
+      description: ACTIVE projects count against the plan limit (FREE 2, PRO unlimited).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProjectCreate" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Success"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Project" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: "Not the owner, or plan project limit reached", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { $ref: "#/components/responses/ValidationError" }
+    get:
+      tags: [Projects]
+      summary: List projects with progress (owner or member)
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Search"
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/ProjectStatus" } }
+        - { name: sortBy, in: query, schema: { type: string, enum: [createdAt, name, dueDate], default: createdAt } }
+        - $ref: "#/components/parameters/SortOrder"
+      responses:
+        "200":
+          description: Projects
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessList"
+                  - type: object
+                    properties:
+                      data: { type: array, items: { $ref: "#/components/schemas/Project" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /projects/{projectId}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      tags: [Projects]
+      summary: Get a project with progress
+      responses:
+        "200":
+          description: Project
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Success"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Project" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+    patch:
+      tags: [Projects]
+      summary: Update a project (owner)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProjectUpdate" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Success"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Project" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+    delete:
+      tags: [Projects]
+      summary: Soft-delete a project and its tasks (owner)
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ────────────────────────────── Tasks ──────────────────────────────
+  /projects/{projectId}/tasks:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    post:
+      tags: [Tasks]
+      summary: Create a task (owner)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [title]
+              properties:
+                title: { type: string, minLength: 2, maxLength: 200, example: Design login page }
+                description: { type: string, maxLength: 5000 }
+                priority: { $ref: "#/components/schemas/TaskPriority" }
+                dueDate: { type: string, format: date, description: "Not in the past and not after the project's due date.", example: "2027-01-15" }
+                assignedToId: { type: string, format: uuid, description: An active member of the organization. }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Success"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Task" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { description: "Not the owner, or plan task limit reached", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+    get:
+      tags: [Tasks]
+      summary: List a project's tasks (owner or member)
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Search"
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/TaskStatus" } }
+        - { name: priority, in: query, schema: { $ref: "#/components/schemas/TaskPriority" } }
+        - { name: assignedTo, in: query, description: "A user id, `me` or `unassigned`", schema: { type: string } }
+        - { name: sortBy, in: query, schema: { type: string, enum: [createdAt, dueDate, priority, title], default: createdAt } }
+        - $ref: "#/components/parameters/SortOrder"
+      responses:
+        "200":
+          description: Tasks
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessList"
+                  - type: object
+                    properties:
+                      data: { type: array, items: { $ref: "#/components/schemas/Task" } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /tasks/{taskId}:
+    parameters:
+      - $ref: "#/components/parameters/TaskId"
+    get:
+      tags: [Tasks]
+      summary: Get a task
+      responses:
+        "200":
+          description: Task
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Success"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Task" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+    patch:
+      tags: [Tasks]
+      summary: Update a task (owner – all fields; assigned member – description only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                title: { type: string, minLength: 2, maxLength: 200 }
+                description: { type: string, maxLength: 5000, nullable: true }
+                priority: { $ref: "#/components/schemas/TaskPriority" }
+                dueDate: { type: string, format: date, nullable: true }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Success"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Task" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+    delete:
+      tags: [Tasks]
+      summary: Soft-delete a task (owner)
+      responses:
+        "200": { $ref: "#/components/responses/EmptySuccess" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /tasks/{taskId}/status:
+    parameters:
+      - $ref: "#/components/parameters/TaskId"
+    patch:
+      tags: [Tasks]
+      summary: Change task status (owner, or the assigned member)
+      description: |
+        Members follow the workflow TODO → IN_PROGRESS → REVIEW → COMPLETED (also IN_PROGRESS → TODO,
+        REVIEW → IN_PROGRESS, COMPLETED → IN_PROGRESS). The owner may set any status.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [status]
+              properties:
+                status: { $ref: "#/components/schemas/TaskStatus" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Success"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Task" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /tasks/{taskId}/assign:
+    parameters:
+      - $ref: "#/components/parameters/TaskId"
+    patch:
+      tags: [Tasks]
+      summary: Assign or unassign a task (owner)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [assignedToId]
+              properties:
+                assignedToId: { type: string, format: uuid, nullable: true, description: "`null` unassigns the task." }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Success"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Task" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ─────────────────────── Subscriptions & payments ───────────────────────
+  /plans:
+    get:
+      tags: [Subscriptions]
+      summary: Active subscription plans (public, cached)
+      security: []
+      responses:
+        "200":
+          description: Plans
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Success"
+                  - type: object
+                    properties:
+                      data: { type: array, items: { $ref: "#/components/schemas/Plan" } }
+
+  /subscriptions/current:
+    get:
+      tags: [Subscriptions]
+      summary: The organization's effective plan and usage (owner)
+      responses:
+        "200":
+          description: Current subscription
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Success"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/CurrentSubscription" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /payments/initiate:
+    post:
+      tags: [Payments]
+      summary: Start an SSLCommerz payment for a paid plan (owner)
+      description: Creates a PENDING subscription and payment, then returns the SSLCommerz `gatewayUrl` to redirect the user to. Nothing is activated until the gateway confirms the payment.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [planId]
+              properties:
+                planId: { type: string, format: uuid }
+      responses:
+        "201":
+          description: Payment session created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Success"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/PaymentInitiation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "502": { description: The gateway refused or could not be reached, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /payments/validate:
+    post:
+      tags: [Payments]
+      summary: SSLCommerz success / fail / cancel callback
+      description: |
+        Called by SSLCommerz (form post from the customer's browser). With a `val_id`, the server calls the
+        **SSLCommerz validation API** and checks status, transaction id, amount and currency before activating.
+        A callback without `val_id` never activates anything. Repeated callbacks are idempotent.
+        Form posts are redirected (303) to `FRONTEND_URL/payment/result?status=…&transactionId=…`;
+        JSON requests receive the result below.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema: { $ref: "#/components/schemas/GatewayCallback" }
+          application/json:
+            schema: { $ref: "#/components/schemas/GatewayCallback" }
+      responses:
+        "200":
+          description: Processing result (JSON requests)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Success"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/PaymentResult" }
+        "303": { description: Redirect to the frontend result page (form posts) }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /payments/ipn:
+    post:
+      tags: [Payments]
+      summary: SSLCommerz IPN (server-to-server)
+      description: The `verify_sign`/`verify_key` signature is checked first, then the payment is validated with SSLCommerz exactly like `/payments/validate`.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/GatewayCallback"
+                - type: object
+                  required: [verify_sign, verify_key]
+                  properties:
+                    verify_sign: { type: string }
+                    verify_key: { type: string, example: "amount,currency,status,tran_id,val_id" }
+      responses:
+        "200":
+          description: Processed
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Success"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/PaymentResult" }
+        "400": { description: Invalid IPN signature, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /payments/history:
+    get:
+      tags: [Payments]
+      summary: The organization's payments (owner)
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/PaymentStatus" } }
+      responses:
+        "200":
+          description: Payments
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessList"
+                  - type: object
+                    properties:
+                      data: { type: array, items: { $ref: "#/components/schemas/Payment" } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  # ────────────────────────────── Admin ──────────────────────────────
+  /admin/dashboard:
+    get:
+      tags: [Admin]
+      summary: Platform statistics (SUPER_ADMIN)
+      responses:
+        "200":
+          description: Statistics (computed from the database, cached 60 s)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Success"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/DashboardStats" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /admin/organizations:
+    get:
+      tags: [Admin]
+      summary: All organizations (SUPER_ADMIN)
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Search"
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/OrganizationStatus" } }
+      responses:
+        "200":
+          description: Organizations
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessList"
+                  - type: object
+                    properties:
+                      data: { type: array, items: { $ref: "#/components/schemas/AdminOrganization" } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /admin/organizations/{id}/status:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      tags: [Admin]
+      summary: Suspend or reactivate an organization (SUPER_ADMIN)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [status]
+              properties:
+                status: { $ref: "#/components/schemas/OrganizationStatus" }
+                reason: { type: string, minLength: 3, maxLength: 500, example: Terms of service violation }
+      responses:
+        "200":
+          description: Status changed
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Success"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Organization" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /admin/users:
+    get:
+      tags: [Admin]
+      summary: All users (SUPER_ADMIN)
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Search"
+        - { name: role, in: query, schema: { $ref: "#/components/schemas/UserRole" } }
+        - { name: isActive, in: query, schema: { type: string, enum: ["true", "false"] } }
+      responses:
+        "200":
+          description: Users
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessList"
+                  - type: object
+                    properties:
+                      data: { type: array, items: { $ref: "#/components/schemas/User" } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /admin/payments:
+    get:
+      tags: [Admin]
+      summary: All payments (SUPER_ADMIN)
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/PaymentStatus" } }
+        - { name: organizationId, in: query, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Payments
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessList"
+                  - type: object
+                    properties:
+                      data: { type: array, items: { $ref: "#/components/schemas/Payment" } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /admin/audit-logs:
+    get:
+      tags: [Admin]
+      summary: Audit logs (SUPER_ADMIN)
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+        - { name: action, in: query, schema: { type: string, example: TASK_ASSIGNED } }
+        - { name: entity, in: query, schema: { type: string, example: Task } }
+        - { name: organizationId, in: query, schema: { type: string, format: uuid } }
+        - { name: userId, in: query, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Audit logs
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessList"
+                  - type: object
+                    properties:
+                      data: { type: array, items: { $ref: "#/components/schemas/AuditLog" } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /admin/plans/{planId}:
+    parameters:
+      - { name: planId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      tags: [Admin]
+      summary: Update a subscription plan (SUPER_ADMIN)
+      description: FREE must stay free and active. Invalidates the cached plan list.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                price: { type: string, example: "1500.00" }
+                durationDays: { type: integer, nullable: true }
+                maxMembers: { type: integer }
+                maxProjects: { type: integer, nullable: true }
+                maxTasksPerProject: { type: integer, nullable: true }
+                isActive: { type: boolean }
+      responses:
+        "200":
+          description: Updated plan
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Success"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Plan" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Access token from /auth/login (15 minutes).
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: accessToken
+      description: HTTP-only cookie set by /auth/login.
+
+  parameters:
+    Page: { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+    Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 10 } }
+    Search: { name: search, in: query, schema: { type: string, maxLength: 100 } }
+    SortOrder: { name: sortOrder, in: query, schema: { type: string, enum: [asc, desc], default: desc } }
+    ProjectId: { name: projectId, in: path, required: true, schema: { type: string, format: uuid } }
+    TaskId: { name: taskId, in: path, required: true, schema: { type: string, format: uuid } }
+    MemberId: { name: memberId, in: path, required: true, description: Membership id (from the member list), schema: { type: string, format: uuid } }
+
+  responses:
+    AuthSuccess:
+      description: Logged in. Also sets HTTP-only `accessToken` and `refreshToken` cookies.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Success"
+              - type: object
+                properties:
+                  data:
+                    allOf:
+                      - $ref: "#/components/schemas/AuthTokens"
+                      - type: object
+                        properties:
+                          user: { $ref: "#/components/schemas/User" }
+    EmptySuccess:
+      description: Success without data
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Success"
+              - type: object
+                properties:
+                  data: { type: object, nullable: true, example: null }
+    BadRequest:
+      description: Bad request (business rule violated)
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Unauthorized:
+      description: Missing, invalid or expired token / credentials
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { success: false, message: Authentication required, errors: [] }
+    Forbidden:
+      description: Authenticated but not allowed (role, ownership, suspended organization or plan limit)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { success: false, message: You do not have permission to perform this action, errors: [] }
+    NotFound:
+      description: Not found (or belongs to another organization)
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Conflict:
+      description: Conflict (duplicate)
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    ValidationError:
+      description: Request validation failed
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example:
+            success: false
+            message: Validation failed
+            errors:
+              - { location: body, field: email, message: Invalid email address }
+    TooManyRequests:
+      description: Rate limit exceeded
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    ServiceUnavailable:
+      description: A dependency is unavailable or not configured
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  schemas:
+    Success:
+      type: object
+      properties:
+        success: { type: boolean, example: true }
+        message: { type: string, example: Operation successful }
+        data: {}
+    SuccessList:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            meta: { $ref: "#/components/schemas/PaginationMeta" }
+    PaginationMeta:
+      type: object
+      properties:
+        page: { type: integer, example: 1 }
+        limit: { type: integer, example: 10 }
+        total: { type: integer, example: 25 }
+        totalPages: { type: integer, example: 3 }
+    ErrorDetail:
+      type: object
+      properties:
+        location: { type: string, enum: [body, query, params] }
+        field: { type: string, example: email }
+        message: { type: string, example: Invalid email address }
+    Error:
+      type: object
+      properties:
+        success: { type: boolean, example: false }
+        message: { type: string, example: Something went wrong }
+        errors: { type: array, items: { $ref: "#/components/schemas/ErrorDetail" } }
+
+    UserRole: { type: string, enum: [SUPER_ADMIN, TEAM_OWNER, TEAM_MEMBER] }
+    OrganizationStatus: { type: string, enum: [ACTIVE, SUSPENDED] }
+    ProjectStatus: { type: string, enum: [ACTIVE, COMPLETED, ON_HOLD, ARCHIVED] }
+    TaskStatus: { type: string, enum: [TODO, IN_PROGRESS, REVIEW, COMPLETED] }
+    TaskPriority: { type: string, enum: [LOW, MEDIUM, HIGH, URGENT] }
+    SubscriptionStatus: { type: string, enum: [ACTIVE, EXPIRED, CANCELLED, PENDING] }
+    PaymentStatus: { type: string, enum: [PENDING, SUCCESS, FAILED, CANCELLED] }
+
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, example: John Doe }
+        email: { type: string, format: email }
+        avatar: { type: string, nullable: true }
+        role: { $ref: "#/components/schemas/UserRole" }
+        isActive: { type: boolean }
+        emailVerified: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    AuthTokens:
+      type: object
+      properties:
+        accessToken: { type: string }
+        refreshToken: { type: string }
+    RefreshTokenBody:
+      type: object
+      additionalProperties: false
+      properties:
+        refreshToken: { type: string, description: Optional – the HTTP-only cookie is used when omitted. }
+
+    Organization:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, example: Acme Software }
+        slug: { type: string, example: acme-software-3f9a1c }
+        description: { type: string, nullable: true }
+        status: { $ref: "#/components/schemas/OrganizationStatus" }
+        ownerId: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    OrganizationDetails:
+      allOf:
+        - $ref: "#/components/schemas/Organization"
+        - type: object
+          properties:
+            isOwner: { type: boolean }
+            owner: { type: object, properties: { id: { type: string }, name: { type: string }, email: { type: string } } }
+            stats: { type: object, properties: { members: { type: integer }, projects: { type: integer } } }
+            plan:
+              type: object
+              properties:
+                name: { type: string, example: FREE }
+                maxMembers: { type: integer, example: 5 }
+                maxProjects: { type: integer, nullable: true, example: 2 }
+                maxTasksPerProject: { type: integer, nullable: true, example: 50 }
+                expiresAt: { type: string, format: date-time, nullable: true }
+    Member:
+      type: object
+      properties:
+        id: { type: string, format: uuid, description: Membership id }
+        joinedAt: { type: string, format: date-time }
+        isOwner: { type: boolean }
+        user:
+          type: object
+          properties:
+            id: { type: string, format: uuid }
+            name: { type: string }
+            email: { type: string }
+            avatar: { type: string, nullable: true }
+            role: { $ref: "#/components/schemas/UserRole" }
+            isActive: { type: boolean }
+
+    ProjectCreate:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name: { type: string, minLength: 2, maxLength: 150, example: Website Redesign }
+        description: { type: string, maxLength: 2000 }
+        status: { $ref: "#/components/schemas/ProjectStatus" }
+        startDate: { type: string, format: date, example: "2027-01-01" }
+        dueDate: { type: string, format: date, description: Not in the past; on or after startDate., example: "2027-03-31" }
+    ProjectUpdate:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 2, maxLength: 150 }
+        description: { type: string, maxLength: 2000, nullable: true }
+        status: { $ref: "#/components/schemas/ProjectStatus" }
+        startDate: { type: string, format: date, nullable: true }
+        dueDate: { type: string, format: date, nullable: true }
+    TaskStats:
+      type: object
+      properties:
+        total: { type: integer, example: 3 }
+        completed: { type: integer, example: 1 }
+        byStatus:
+          type: object
+          properties:
+            TODO: { type: integer }
+            IN_PROGRESS: { type: integer }
+            REVIEW: { type: integer }
+            COMPLETED: { type: integer }
+    Project:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        organizationId: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        status: { $ref: "#/components/schemas/ProjectStatus" }
+        startDate: { type: string, format: date-time, nullable: true }
+        dueDate: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        taskStats: { $ref: "#/components/schemas/TaskStats" }
+        progress: { type: number, description: "completed / total × 100 (0 without tasks)", example: 33.33 }
+    Task:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        projectId: { type: string, format: uuid }
+        organizationId: { type: string, format: uuid }
+        title: { type: string }
+        description: { type: string, nullable: true }
+        status: { $ref: "#/components/schemas/TaskStatus" }
+        priority: { $ref: "#/components/schemas/TaskPriority" }
+        dueDate: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        project: { type: object, properties: { id: { type: string }, name: { type: string } } }
+        assignedTo:
+          nullable: true
+          type: object
+          properties: { id: { type: string }, name: { type: string }, email: { type: string }, avatar: { type: string, nullable: true } }
+        createdBy: { type: object, properties: { id: { type: string }, name: { type: string } } }
+
+    Plan:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, example: PRO }
+        price: { type: string, example: "1500.00" }
+        currency: { type: string, example: BDT }
+        durationDays: { type: integer, nullable: true, example: 30 }
+        maxMembers: { type: integer, example: 25 }
+        maxProjects: { type: integer, nullable: true, description: null = unlimited }
+        maxTasksPerProject: { type: integer, nullable: true, example: 1000 }
+    CurrentSubscription:
+      type: object
+      properties:
+        plan: { $ref: "#/components/schemas/Plan" }
+        subscription:
+          nullable: true
+          type: object
+          properties:
+            id: { type: string, format: uuid }
+            status: { $ref: "#/components/schemas/SubscriptionStatus" }
+            startDate: { type: string, format: date-time, nullable: true }
+            endDate: { type: string, format: date-time, nullable: true }
+        usage: { type: object, properties: { members: { type: integer }, activeProjects: { type: integer } } }
+        upcoming:
+          type: array
+          items: { type: object, properties: { id: { type: string }, plan: { type: string }, startDate: { type: string }, endDate: { type: string } } }
+    PaymentInitiation:
+      type: object
+      properties:
+        paymentId: { type: string, format: uuid }
+        transactionId: { type: string, example: TFMWNVM1VIA9F652FC6425 }
+        amount: { type: string, example: "1500.00" }
+        currency: { type: string, example: BDT }
+        plan: { type: object, properties: { id: { type: string }, name: { type: string } } }
+        gatewayUrl: { type: string, format: uri, example: "https://sandbox.sslcommerz.com/EasyCheckOut/testcde..." }
+    GatewayCallback:
+      type: object
+      required: [tran_id]
+      properties:
+        tran_id: { type: string }
+        val_id: { type: string }
+        status: { type: string, example: VALID }
+    PaymentResult:
+      type: object
+      properties:
+        transactionId: { type: string }
+        status: { $ref: "#/components/schemas/PaymentStatus" }
+        alreadyProcessed: { type: boolean, description: True when this callback repeated an already-processed payment. }
+        reasons: { type: array, items: { type: string } }
+    Payment:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        transactionId: { type: string }
+        amount: { type: string, example: "1500.00" }
+        currency: { type: string, example: BDT }
+        paymentGateway: { type: string, example: SSLCOMMERZ }
+        status: { $ref: "#/components/schemas/PaymentStatus" }
+        paidAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        plan: { type: string, example: PRO }
+        subscription: { type: object, properties: { id: { type: string }, status: { $ref: "#/components/schemas/SubscriptionStatus" } } }
+
+    DashboardStats:
+      type: object
+      properties:
+        users: { type: object, properties: { total: { type: integer }, active: { type: integer }, inactive: { type: integer }, newLast30Days: { type: integer }, byRole: { type: object } } }
+        organizations: { type: object, properties: { total: { type: integer }, ACTIVE: { type: integer }, SUSPENDED: { type: integer }, newLast30Days: { type: integer } } }
+        projects: { type: object, properties: { total: { type: integer } } }
+        tasks: { type: object, properties: { total: { type: integer }, completed: { type: integer } } }
+        subscriptions: { type: object, properties: { activePaid: { type: integer } } }
+        payments: { type: object, properties: { total: { type: integer }, byStatus: { type: object }, totalRevenue: { type: string, example: "3000.00" }, revenueLast30Days: { type: string }, currency: { type: string } } }
+        generatedAt: { type: string, format: date-time }
+    AdminOrganization:
+      allOf:
+        - $ref: "#/components/schemas/Organization"
+        - type: object
+          properties:
+            owner: { type: object, properties: { id: { type: string }, name: { type: string }, email: { type: string } } }
+            stats: { type: object, properties: { members: { type: integer }, projects: { type: integer } } }
+            plan: { type: string, example: PRO }
+            planExpiresAt: { type: string, format: date-time, nullable: true }
+    AuditLog:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        action: { type: string, example: TASK_STATUS_CHANGED }
+        entity: { type: string, example: Task }
+        entityId: { type: string, nullable: true }
+        metadata: { type: object, nullable: true, example: { from: TODO, to: IN_PROGRESS } }
+        createdAt: { type: string, format: date-time }
+        user: { nullable: true, type: object, properties: { id: { type: string }, name: { type: string }, email: { type: string } } }
+        organization: { nullable: true, type: object, properties: { id: { type: string }, name: { type: string } } }
