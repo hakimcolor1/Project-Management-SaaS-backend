@@ -11,6 +11,7 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "prisma generate && tsup",
+    "build:vercel": "prisma generate && prisma migrate deploy && tsup",
     "start": "node dist/server.js",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
