@@ -19,6 +19,7 @@ import type {
   PaymentHistoryQuery,
   PaymentProcessingResult,
 } from "./payment.interface.js";
+import { isUuid } from "./payment.validation.js";
 
 const DAY_MS = 86_400_000;
 const VALID_GATEWAY_STATUSES = new Set(["VALID", "VALIDATED"]);
@@ -290,7 +291,30 @@ const processGatewayCallback = async (callback: GatewayCallbackInput): Promise<P
   };
 };
 
-// ── History ──────────────────────────────────────────────────────────
+// ── History & status tracking ────────────────────────────────────────
+
+/** What an owner may see of a payment. The raw gateway response is never exposed. */
+const paymentViewSelect = {
+  id: true,
+  transactionId: true,
+  amount: true,
+  currency: true,
+  paymentGateway: true,
+  status: true,
+  paidAt: true,
+  createdAt: true,
+  updatedAt: true,
+  subscription: { select: { id: true, status: true, startDate: true, endDate: true, plan: { select: { name: true } } } },
+} satisfies Prisma.PaymentSelect;
+
+type PaymentViewRow = Prisma.PaymentGetPayload<{ select: typeof paymentViewSelect }>;
+
+const toPaymentView = ({ amount, subscription: { plan, ...subscription }, ...payment }: PaymentViewRow) => ({
+  ...payment,
+  amount: amount.toFixed(2),
+  plan: plan.name,
+  subscription,
+});
 
 const getPaymentHistory = async (context: OrganizationContext, query: PaymentHistoryQuery) => {
   const where: Prisma.PaymentWhereInput = {
@@ -301,35 +325,37 @@ const getPaymentHistory = async (context: OrganizationContext, query: PaymentHis
     prisma.payment.findMany({
       where,
       orderBy: { createdAt: "desc" },
-      select: {
-        id: true,
-        transactionId: true,
-        amount: true,
-        currency: true,
-        paymentGateway: true,
-        status: true,
-        paidAt: true,
-        createdAt: true,
-        subscription: { select: { id: true, status: true, startDate: true, endDate: true, plan: { select: { name: true } } } },
-      },
+      select: paymentViewSelect,
       ...getPaginationArgs(query),
     }),
     prisma.payment.count({ where }),
   ]);
 
-  return {
-    payments: payments.map(({ amount, subscription: { plan, ...subscription }, ...payment }) => ({
-      ...payment,
-      amount: amount.toFixed(2),
-      plan: plan.name,
-      subscription,
-    })),
-    meta: buildPaginationMeta(query, total),
-  };
+  return { payments: payments.map(toPaymentView), meta: buildPaginationMeta(query, total) };
+};
+
+/**
+ * One payment of the caller's organization, looked up by its id (UUID) or by
+ * its transaction id (what the gateway result redirect carries). Payments of
+ * other organizations are reported as not found.
+ */
+const getPayment = async (context: OrganizationContext, paymentRef: string) => {
+  const payment = await prisma.payment.findFirst({
+    where: {
+      organizationId: context.id,
+      ...(isUuid(paymentRef) ? { id: paymentRef } : { transactionId: paymentRef }),
+    },
+    select: paymentViewSelect,
+  });
+  if (!payment) {
+    throw AppError.notFound("Payment not found");
+  }
+  return toPaymentView(payment);
 };
 
 export const paymentService = {
   initiatePayment,
   processGatewayCallback,
   getPaymentHistory,
+  getPayment,
 };

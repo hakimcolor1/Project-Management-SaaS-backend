@@ -21,3 +21,20 @@ export const gatewayCallbackSchema = z.looseObject({
 export const paymentHistoryQuerySchema = paginationQuerySchema.extend({
   status: z.enum(PaymentStatus).optional(),
 });
+
+const uuidOnly = z.uuid();
+export const isUuid = (value: string) => uuidOnly.safeParse(value).success;
+
+/** Our transaction ids are letters and digits only (see generateTransactionId). */
+const TRANSACTION_ID_PATTERN = /^[A-Za-z0-9]{8,64}$/;
+
+/** GET /payments/:paymentId – a payment UUID or its transaction id. */
+export const paymentIdParamsSchema = z.object({
+  paymentId: z
+    .string()
+    .trim()
+    .refine(
+      (value) => isUuid(value) || TRANSACTION_ID_PATTERN.test(value),
+      "Must be a payment ID (UUID) or a transaction ID",
+    ),
+});

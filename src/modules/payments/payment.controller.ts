@@ -13,6 +13,8 @@ import type {
 } from "./payment.interface.js";
 import { paymentService } from "./payment.service.js";
 
+type PaymentParams = { paymentId: string };
+
 const RESULT_MESSAGES: Record<PaymentProcessingResult["status"], string> = {
   SUCCESS: "Payment verified and subscription activated",
   FAILED: "Payment failed",
@@ -83,4 +85,12 @@ export const getPaymentHistory: RequestHandler = async (req, res) => {
     req.query as unknown as PaymentHistoryQuery,
   );
   sendSuccess(res, { message: "Payment history retrieved successfully", data: payments, meta });
+};
+
+export const getPayment: RequestHandler = async (req, res) => {
+  const payment = await paymentService.getPayment(
+    getOrganizationContext(req),
+    (req.params as PaymentParams).paymentId,
+  );
+  sendSuccess(res, { message: "Payment retrieved successfully", data: payment });
 };

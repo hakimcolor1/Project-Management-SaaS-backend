@@ -2,8 +2,13 @@ import express, { Router } from "express";
 import { authenticate } from "../../middlewares/auth.middleware.js";
 import { organizationOwnerAccess } from "../../middlewares/organization.middleware.js";
 import { validate } from "../../middlewares/validate.middleware.js";
-import { getPaymentHistory, handleIpn, initiatePayment, validatePayment } from "./payment.controller.js";
-import { gatewayCallbackSchema, initiatePaymentSchema, paymentHistoryQuerySchema } from "./payment.validation.js";
+import { getPayment, getPaymentHistory, handleIpn, initiatePayment, validatePayment } from "./payment.controller.js";
+import {
+  gatewayCallbackSchema,
+  initiatePaymentSchema,
+  paymentHistoryQuerySchema,
+  paymentIdParamsSchema,
+} from "./payment.validation.js";
 
 export const paymentRoutes = Router();
 
@@ -28,4 +33,13 @@ paymentRoutes.get(
   organizationOwnerAccess(),
   validate({ query: paymentHistoryQuerySchema }),
   getPaymentHistory,
+);
+
+// Status tracking for one payment. Registered after /history so that path is never read as an id.
+paymentRoutes.get(
+  "/:paymentId",
+  authenticate,
+  organizationOwnerAccess(),
+  validate({ params: paymentIdParamsSchema }),
+  getPayment,
 );
