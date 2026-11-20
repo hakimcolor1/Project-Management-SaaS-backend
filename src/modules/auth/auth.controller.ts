@@ -3,6 +3,7 @@ import { getAuthUser } from "../../middlewares/auth.middleware.js";
 import { REFRESH_TOKEN_COOKIE, clearAuthCookies, readCookie, setAuthCookies } from "../../utils/cookies.js";
 import { sendSuccess } from "../../utils/response.js";
 import type { GoogleLoginInput, LoginInput, RefreshTokenBody, RegisterInput } from "./auth.interface.js";
+import type { PublicUser } from "../users/user.interface.js";
 import { userService } from "../users/user.service.js";
 import { authService } from "./auth.service.js";
 
@@ -29,6 +30,19 @@ export const login: RequestHandler = async (req, res) => {
 
 export const googleLogin: RequestHandler = async (req, res) => {
   const { user, tokens } = await authService.loginWithGoogle(req.body as GoogleLoginInput);
+  setAuthCookies(res, tokens);
+  sendSuccess(res, { message: "Google login successful", data: { user, ...tokens } });
+};
+
+/**
+ * End of the Google redirect flow. `completeGoogleOAuth` (config/passport.ts)
+ * has already checked `state`, exchanged the code and verified + linked the
+ * ID token with the same service as POST /auth/google; only the session is
+ * issued here.
+ */
+export const googleOAuthCallback: RequestHandler = async (_req, res) => {
+  const user = res.locals.googleUser as PublicUser;
+  const tokens = await authService.createSession(user);
   setAuthCookies(res, tokens);
   sendSuccess(res, { message: "Google login successful", data: { user, ...tokens } });
 };

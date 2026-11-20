@@ -3,10 +3,12 @@ import { AppError } from "../utils/app-error.js";
 import { env } from "./env.js";
 
 /**
- * Google sign-in uses the ID-token flow: the frontend obtains an ID token from
- * Google Identity Services and posts it to POST /auth/google, where it is
- * verified here with Google's official library. (No Passport/redirect flow is
- * needed for this, so GOOGLE_CLIENT_SECRET / GOOGLE_CALLBACK_URL are unused.)
+ * Verifies Google ID tokens with Google's official library. Used by both
+ * Google sign-in flows:
+ *  - ID-token flow: a frontend gets an ID token from Google Identity Services
+ *    and posts it to POST /auth/google (needs GOOGLE_CLIENT_ID only).
+ *  - Redirect flow: GET /auth/google → Google → GET /auth/google/callback,
+ *    see passport.ts (also needs GOOGLE_CLIENT_SECRET).
  */
 
 const GOOGLE_ISSUERS = new Set(["accounts.google.com", "https://accounts.google.com"]);

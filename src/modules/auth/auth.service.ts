@@ -107,7 +107,7 @@ const login = async ({ email, password }: LoginInput): Promise<AuthResult> => {
  *    all existing sessions are revoked (prevents account pre-hijacking).
  *  - SUPER_ADMIN accounts must use their password and cannot use Google.
  */
-const loginWithGoogle = async ({ idToken }: GoogleLoginInput): Promise<AuthResult> => {
+const findOrCreateGoogleUser = async (idToken: string): Promise<PublicUser> => {
   const profile = await verifyGoogleIdToken(idToken);
 
   const assertCanSignIn = (account: { role: UserRole; isActive: boolean }) => {
@@ -119,7 +119,7 @@ const loginWithGoogle = async ({ idToken }: GoogleLoginInput): Promise<AuthResul
     }
   };
 
-  const user = await prisma.$transaction(async (tx) => {
+  return prisma.$transaction(async (tx) => {
     const linked = await tx.user.findUnique({ where: { googleId: profile.googleId }, select: publicUserSelect });
     if (linked) {
       assertCanSignIn(linked);
@@ -166,8 +166,15 @@ const loginWithGoogle = async ({ idToken }: GoogleLoginInput): Promise<AuthResul
       select: publicUserSelect,
     });
   });
+};
 
-  return { user, tokens: await issueTokens(user) };
+/** Starts a session (access + refresh token) for a user who has already been authenticated. */
+const createSession = (user: Pick<PublicUser, "id" | "role">): Promise<AuthTokens> => issueTokens(user);
+
+/** POST /auth/google – ID-token flow. */
+const loginWithGoogle = async ({ idToken }: GoogleLoginInput): Promise<AuthResult> => {
+  const user = await findOrCreateGoogleUser(idToken);
+  return { user, tokens: await createSession(user) };
 };
 
 /**
@@ -238,6 +245,8 @@ const logout = async (rawToken: string | undefined): Promise<void> => {
 export const authService = {
   register,
   login,
+  findOrCreateGoogleUser,
+  createSession,
   loginWithGoogle,
   refreshTokens,
   logout,
