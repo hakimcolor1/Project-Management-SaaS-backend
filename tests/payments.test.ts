@@ -353,3 +353,53 @@ describe("GET /payments/history", () => {
     expect((await request(app).get(`${API}/payments/history`).set("Authorization", bearerFor(member))).status).toBe(403);
   });
 });
+
+describe("GET /payments/:paymentId", () => {
+  it("tracks one payment by id or transaction id, from PENDING to SUCCESS", async () => {
+    const { auth } = await setup();
+    const { transactionId, paymentId } = await initiate(auth);
+
+    const pending = await request(app).get(`${API}/payments/${paymentId}`).set("Authorization", auth);
+    expect(pending.status).toBe(200);
+    expect(pending.body.message).toBe("Payment retrieved successfully");
+    expect(pending.body.data).toMatchObject({
+      id: paymentId,
+      transactionId,
+      amount: "1500.00",
+      currency: "BDT",
+      paymentGateway: "SSLCOMMERZ",
+      status: "PENDING",
+      paidAt: null,
+      plan: "PRO",
+      subscription: { status: "PENDING", startDate: null, endDate: null },
+    });
+    expect(pending.body.data).not.toHaveProperty("gatewayResponse");
+
+    gateway.validatePaymentWithGateway.mockResolvedValue(validValidation(transactionId));
+    await request(app).post(`${API}/payments/validate`).send({ tran_id: transactionId, val_id: `VAL-${transactionId}`, status: "VALID" });
+
+    const paid = await request(app).get(`${API}/payments/${transactionId}`).set("Authorization", auth);
+    expect(paid.status).toBe(200);
+    expect(paid.body.data).toMatchObject({ id: paymentId, status: "SUCCESS", subscription: { status: "ACTIVE" } });
+    expect(paid.body.data.paidAt).not.toBeNull();
+  });
+
+  it("hides other organizations' payments and checks role and id format", async () => {
+    const { organization, auth } = await setup();
+    const { user: member } = await addMemberTo(organization.id);
+    const { paymentId, transactionId } = await initiate(auth);
+    const other = await setup();
+
+    for (const ref of [paymentId, transactionId]) {
+      const foreign = await request(app).get(`${API}/payments/${ref}`).set("Authorization", other.auth);
+      expect(foreign.status).toBe(404);
+      expect(foreign.body).toEqual({ success: false, message: "Payment not found", errors: [] });
+    }
+    expect((await request(app).get(`${API}/payments/00000000-0000-4000-8000-000000000000`).set("Authorization", auth)).status).toBe(404);
+    expect((await request(app).get(`${API}/payments/TFUNKNOWN123`).set("Authorization", auth)).status).toBe(404);
+
+    expect((await request(app).get(`${API}/payments/${paymentId}`)).status).toBe(401);
+    expect((await request(app).get(`${API}/payments/${paymentId}`).set("Authorization", bearerFor(member))).status).toBe(403);
+    expect((await request(app).get(`${API}/payments/bad%20id!`).set("Authorization", auth)).status).toBe(422);
+  });
+});

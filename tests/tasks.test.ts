@@ -310,3 +310,65 @@ describe("DELETE /tasks/:taskId", () => {
     expect((await prisma.task.findUniqueOrThrow({ where: { id: task.id } })).deletedAt).toBeNull();
   });
 });
+
+describe("GET /tasks/my-assigned", () => {
+  const url = `${API}/tasks/my-assigned`;
+  const ids = (res: request.Response) => (res.body.data as { id: string }[]).map((task) => task.id).sort();
+
+  it("lists the caller's live tasks across all projects of their organization", async () => {
+    const { owner, member, organization, project, memberAuth } = await setup();
+    const second = await createProject(organization.id, { name: "Mobile" });
+    const deletedProject = await createProject(organization.id, { deletedAt: new Date() });
+
+    const todo = await createTask(project, owner.id, { title: "Login page", assignedToId: member.id });
+    const inProgress = await createTask(second, owner.id, { title: "Push alerts", status: "IN_PROGRESS", assignedToId: member.id });
+    await createTask(project, owner.id, { assignedToId: owner.id });
+    await createTask(project, owner.id, { assignedToId: null });
+    await createTask(project, owner.id, { assignedToId: member.id, deletedAt: new Date() });
+    await createTask(deletedProject, owner.id, { assignedToId: member.id });
+
+    const res = await request(app).get(url).set("Authorization", memberAuth);
+
+    expect(res.status).toBe(200);
+    expect(res.body.message).toBe("Assigned tasks retrieved successfully");
+    expect(ids(res)).toEqual([todo.id, inProgress.id].sort());
+    expect(res.body.meta).toEqual({ page: 1, limit: 10, total: 2, totalPages: 1 });
+    expect(res.body.data).toContainEqual(
+      expect.objectContaining({
+        id: inProgress.id,
+        status: "IN_PROGRESS",
+        project: { id: second.id, name: "Mobile" },
+        assignedTo: expect.objectContaining({ id: member.id }),
+      }),
+    );
+
+    const get = (query: string) => request(app).get(`${url}?${query}`).set("Authorization", memberAuth);
+    expect(ids(await get("status=IN_PROGRESS"))).toEqual([inProgress.id]);
+    expect(ids(await get(`projectId=${project.id}`))).toEqual([todo.id]);
+    expect(ids(await get("search=push"))).toEqual([inProgress.id]);
+    const firstPage = await get("page=1&limit=1&sortBy=title&sortOrder=asc");
+    expect(ids(firstPage)).toEqual([todo.id]);
+    expect(firstPage.body.meta).toEqual({ page: 1, limit: 1, total: 2, totalPages: 2 });
+  });
+
+  it("never shows another organization's tasks and checks role, membership and query", async () => {
+    const { owner, project, ownerAuth } = await setup();
+    const ownTask = await createTask(project, owner.id, { assignedToId: owner.id });
+    const other = await setup();
+    await createTask(other.project, other.owner.id, { assignedToId: other.member.id });
+
+    const ownerRes = await request(app).get(url).set("Authorization", ownerAuth);
+    expect(ownerRes.status).toBe(200);
+    expect(ids(ownerRes)).toEqual([ownTask.id]);
+
+    expect((await request(app).get(url)).status).toBe(401);
+    const admin = await createUser({ role: "SUPER_ADMIN" });
+    expect((await request(app).get(url).set("Authorization", bearerFor(admin))).status).toBe(403);
+    const loner = await createUser({ role: "TEAM_MEMBER" });
+    expect((await request(app).get(url).set("Authorization", bearerFor(loner))).status).toBe(404);
+
+    const invalid = await request(app).get(`${url}?status=DONE&projectId=nope&limit=500`).set("Authorization", ownerAuth);
+    expect(invalid.status).toBe(422);
+    expect((invalid.body.errors as { field: string }[]).map((error) => error.field).sort()).toEqual(["limit", "projectId", "status"]);
+  });
+});
