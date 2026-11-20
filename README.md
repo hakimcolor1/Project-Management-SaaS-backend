@@ -6,7 +6,7 @@ Multi-tenant REST API for TeamFlow. Each organization gets an isolated workspace
 | --- | --- |
 | **API docs** | Swagger UI at `/api-docs` · [docs/API.md](docs/API.md) · [Postman collection](docs/TeamFlow.postman_collection.json) |
 | **Progress log** | [DEVELOPMENT_PROGRESS.md](DEVELOPMENT_PROGRESS.md) |
-| **Live API** | See [Deployment](#deployment) |
+| **Live API** | https://teamflow-backend-two.vercel.app · [Swagger UI](https://teamflow-backend-two.vercel.app/api-docs) · [health](https://teamflow-backend-two.vercel.app/api/v1/health) |
 
 ## Features
 
@@ -56,7 +56,7 @@ Architecture: modular monolith – `Routes → Middlewares → Controllers → S
 
 ## Getting started
 
-Prerequisites: Node.js ≥ 24.11, Bun ≥ 1.2, and PostgreSQL. A Docker Compose file is included.
+Prerequisites: Node.js 24, Bun ≥ 1.2, and PostgreSQL. A Docker Compose file is included.
 
 ```bash
 bun install                     # also generates the Prisma client
@@ -119,10 +119,36 @@ Every variable is validated at startup (`src/config/env.ts`). If anything is mis
 
 ## Deployment
 
-The project deploys to Vercel as a serverless function. Fill in after deploying:
+- **Live API:** https://teamflow-backend-two.vercel.app (base path `/api/v1`)
+- **API docs:** https://teamflow-backend-two.vercel.app/api-docs
+- **Database:** Prisma Postgres (production PostgreSQL)
 
-- **Live API:** *(pending)*
-- **API docs:** *(pending)*/api-docs
+How it runs on Vercel:
+
+- `api/index.js` is the serverless entry. It exports the compiled Express app (`dist/app.js`) and never calls `listen()`. Local servers use `dist/server.js` instead.
+- `vercel.json` rewrites every path to that function. It also installs with Bun and bundles `docs/api-documentation.yaml` with the function for Swagger.
+- The build command is `bun run build:vercel`, which runs `prisma generate`, then `prisma migrate deploy`, then `tsup`. `migrate deploy` only applies committed migrations that are still pending. It never resets data.
+- `NODE_ENV` defaults to `production` inside the entry file. It is not set on Vercel, because a production install would skip the devDependencies that the build needs.
+- `.vercelignore` keeps `.env`, `node_modules` and build output from being uploaded.
+- Deploys: every push to `main` deploys through the Vercel Git integration, or run `vercel deploy --prod`.
+
+Production environment variables (Vercel → Settings → Environment Variables):
+
+| Set | Not set |
+| --- | --- |
+| `DATABASE_URL`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `JWT_ACCESS_EXPIRES_IN`, `JWT_REFRESH_EXPIRES_IN`, `BACKEND_URL`, `FRONTEND_URL`, `SSL_STORE_ID`, `SSL_STORE_PASSWORD`, `SSL_IS_LIVE` | `GOOGLE_CLIENT_ID` (Google login returns 503 until it is set), `REDIS_URL` / `REDIS_TOKEN` (caching is skipped), `DEMO_ADMIN_*` (seed only, run once against the production DB) |
+
+After adding a variable, redeploy so it takes effect.
+
+## Submission
+
+| | |
+| --- | --- |
+| **Project name** | TeamFlow – Project Management SaaS |
+| **Backend repo** | https://github.com/hakimcolor1/Project-Management-SaaS-backend |
+| **Live API** | https://teamflow-backend-two.vercel.app |
+| **API docs** | https://teamflow-backend-two.vercel.app/api-docs · [Postman collection](docs/TeamFlow.postman_collection.json) |
+| **Admin login** | The seeded SUPER_ADMIN (`DEMO_ADMIN_EMAIL` / `DEMO_ADMIN_PASSWORD`). The credentials are given in the submission form and are never committed. |
 
 ## Project structure
 

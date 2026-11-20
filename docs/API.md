@@ -1,6 +1,6 @@
 # TeamFlow API Guide
 
-- **Base URL:** `{host}/api/v1`. Locally that is `http://localhost:5000/api/v1`.
+- **Base URL:** `{host}/api/v1`. Production: `https://teamflow-backend-two.vercel.app/api/v1`. Locally: `http://localhost:5000/api/v1`.
 - **Interactive docs:** Swagger UI at `{host}/api-docs`, with the raw OpenAPI file at `{host}/api-docs/openapi.yaml` (source: [`api-documentation.yaml`](api-documentation.yaml)).
 - **Postman:** import [`TeamFlow.postman_collection.json`](TeamFlow.postman_collection.json) and [`TeamFlow.postman_environment.json`](TeamFlow.postman_environment.json).
 

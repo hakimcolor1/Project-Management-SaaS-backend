@@ -14,21 +14,61 @@ Source of truth: `../REQUIREMENTS.md`. One phase at a time; each phase ends with
 | 6 | Subscriptions & SSLCommerz | plans, current subscription, effective-plan resolution (expiry), initiate / validate / IPN / history, gateway validation, idempotent processing | ✅ Done (2026-11-20) |
 | 7 | Super admin + Redis | dashboard stats, organizations, payments, audit logs, org status; Upstash caching with expiry + invalidation | ✅ Done (2026-11-20) |
 | 8 | API documentation | Swagger UI at `/api-docs` (OpenAPI YAML), Postman collection + environment, `docs/API.md` | ✅ Done (2026-11-20) |
-| 9 | Deployment & final QA | Vercel serverless entry + `vercel.json`, production DB migrations, live verification, README + submission details | ⏳ In progress |
+| 9 | Deployment & final QA | Vercel serverless entry + `vercel.json`, production DB migrations, live verification, README + submission details | ✅ Done (2026-11-20) |
 
 ## Missing configuration
 
 | What | Needed for | Status |
 | --- | --- | --- |
 | Google OAuth Client ID (GCP) | `POST /auth/google` | ❌ Not provided. The endpoint is implemented and returns **503 "Google login is not configured"** until `GOOGLE_CLIENT_ID` is set. It is never faked. |
-| SSLCommerz sandbox Store ID / password | Payments | ⚠️ No own store yet. SSLCommerz's **public sandbox demo store** (`SSL_STORE_ID=testbox`, `SSL_STORE_PASSWORD=qwerty`, `SSL_IS_LIVE=false`) works and was used for the live checks. Use your own sandbox store for the submission if you have one. Without credentials, `/payments/initiate` returns 503. |
-| Upstash Redis REST URL / token | Phase 7 – caching | ❌ Not provided (caching will be skipped when unset) |
-| Production PostgreSQL | Phase 9 | ✅ Prisma Postgres (`db.prisma.io`) connected 2026-11-19 via `.env` `DATABASE_URL` (`sslmode=verify-full`): `init` migration applied with `migrate deploy`, seed run (SUPER_ADMIN + FREE/PRO), `/health` → database connected, admin login + `/auth/me` verified. Still to do: set the same `DATABASE_URL` on Vercel in Phase 9. Tests keep using the local `teamflow_test` DB. |
-| GitHub remote + Vercel project | Push / deployment | ❌ No remote configured (local commits only) |
+| SSLCommerz sandbox Store ID / password | Payments | ⚠️ No own store yet. SSLCommerz's **public sandbox demo store** (`SSL_STORE_ID=testbox`, `SSL_STORE_PASSWORD=qwerty`, `SSL_IS_LIVE=false`) works. It is set on Vercel and was used for the live checks. Swap in your own sandbox store on Vercel if you have one. Without credentials, `/payments/initiate` returns 503. |
+| Upstash Redis REST URL / token | Phase 7 – caching | ❌ Not provided (caching is skipped when unset). Add `REDIS_URL` + `REDIS_TOKEN` on Vercel and redeploy to turn it on. |
+| Production PostgreSQL | Phase 9 | ✅ Prisma Postgres (`db.prisma.io`). Migrated and seeded on 2026-11-19. Set as `DATABASE_URL` on Vercel on 2026-11-20. Every Vercel build runs `prisma migrate deploy`. Tests keep using the local `teamflow_test` DB. |
+| GitHub remote + Vercel project | Push / deployment | ✅ `origin` = github.com/hakimcolor1/Project-Management-SaaS-backend. Vercel project `teamflow-backend` (team `hakimcolor2`) is linked to the repo, so a push to `main` deploys. |
 
 ## Open questions
 
 - `PATCH /organizations/current/members/:memberId`: membership has no editable fields in §6.3. Decision: the owner activates or deactivates the member's access (`{ "isActive": false }`). No answer was given, so this was implemented as proposed. Easy to change if a different meaning is wanted.
+
+---
+
+## Phase 9 – Deployment & final QA ✅
+
+**Live API:** https://teamflow-backend-two.vercel.app · **Docs:** https://teamflow-backend-two.vercel.app/api-docs
+
+### Delivered – Phase 9
+
+- **Duplicate backend removed.** `../teamflow-backend-readability` was a leftover git worktree of this repo, on branch `refactor/readability`. That branch was fully merged into `main` and had no uncommitted changes. The worktree was removed with `git worktree remove` and the merged branch was deleted. Only `teamflow-backend/` remains.
+- **Serverless entry** `api/index.js`:
+  - re-exports the compiled Express app (`dist/app.js`) and never calls `listen()`
+  - defaults `NODE_ENV` to `production` before the app's config loads
+- **`vercel.json`:**
+  - Bun install, and the build command `bun run build:vercel` (`prisma generate` → `prisma migrate deploy` → `tsup`)
+  - region `sin1`, with every path rewritten to the function
+  - `includeFiles` for `dist/**/*.js` and the OpenAPI YAML
+- **`.vercelignore`** keeps `.env`, `node_modules`, `dist` and the generated Prisma client out of uploads. `public/robots.txt` is served as the static output and tells crawlers to stay away.
+- `engines.node` is pinned to `24.x`, which removes Vercel's auto-upgrade warning.
+- **Vercel project `teamflow-backend`**, Production environment variables:
+  - `DATABASE_URL`
+  - fresh production JWT secrets, generated for the deployment and different from the local `.env` ones
+  - JWT expiries, `BACKEND_URL`, `FRONTEND_URL`
+  - SSLCommerz sandbox credentials
+  - `GOOGLE_CLIENT_ID` and Redis are not set (see Missing configuration).
+
+### Verification – Phase 9 (2026-11-20)
+
+- Local: `bun run typecheck` ✅ · `bun run lint` ✅ · `bun run build` ✅ · `bun run test` ✅ **158/158**. The handler was also smoke-tested locally through `api/index.js` (root, health, Swagger, OpenAPI, 404).
+- Vercel build log: `prisma migrate deploy` reported "No pending migrations to apply". The function `api/index` is 3.3 MB.
+- **Newman run of the full Postman collection against production:** **53/53 requests and 53/53 assertions passed**, average 285 ms. It covers auth, organizations, members, projects, tasks with the member workflow, plans, a real SSLCommerz sandbox payment session, admin (with the seeded SUPER_ADMIN) and cleanup.
+- Live spot checks:
+  - `/api/v1/health` → database `connected`, environment `production`
+  - auth cookies are `HttpOnly; Secure; SameSite=None`
+  - Zod validation errors → 400
+  - unauthenticated → 401, unknown route → 404 JSON
+  - `/auth/google` → "not configured" (honest 503)
+  - HSTS, `nosniff` and `RateLimit` headers are present
+  - `/.env` and `/dist/app.js` are not served (404)
+- **Not verified in a browser:** finishing a payment on the SSLCommerz sandbox checkout page. The Chrome extension was not connected. Initiation against production works and returns a real `sandbox.sslcommerz.com` checkout URL. See "Sandbox payment walkthrough" in README.md.
 
 ---
 
