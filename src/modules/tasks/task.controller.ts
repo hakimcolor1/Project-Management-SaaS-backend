@@ -5,6 +5,7 @@ import { sendSuccess } from "../../utils/response.js";
 import type {
   AssignTaskInput,
   CreateTaskInput,
+  ListMyTasksQuery,
   ListTasksQuery,
   UpdateTaskInput,
   UpdateTaskStatusInput,
@@ -32,6 +33,15 @@ export const listProjectTasks: RequestHandler = async (req, res) => {
     req.query as unknown as ListTasksQuery,
   );
   sendSuccess(res, { message: "Tasks retrieved successfully", data: tasks, meta });
+};
+
+export const listMyTasks: RequestHandler = async (req, res) => {
+  const { tasks, meta } = await taskService.listMyTasks(
+    getOrganizationContext(req),
+    getAuthUser(req),
+    req.query as unknown as ListMyTasksQuery,
+  );
+  sendSuccess(res, { message: "Assigned tasks retrieved successfully", data: tasks, meta });
 };
 
 export const getTask: RequestHandler = async (req, res) => {

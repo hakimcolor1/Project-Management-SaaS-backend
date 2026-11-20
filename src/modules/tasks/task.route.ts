@@ -10,6 +10,7 @@ import {
   createTask,
   deleteTask,
   getTask,
+  listMyTasks,
   listProjectTasks,
   updateTask,
   updateTaskStatus,
@@ -17,6 +18,7 @@ import {
 import {
   assignTaskSchema,
   createTaskSchema,
+  listMyTasksQuerySchema,
   listTasksQuerySchema,
   projectTasksParamsSchema,
   taskIdParamsSchema,
@@ -45,6 +47,8 @@ projectTaskRoutes.get(
 export const taskRoutes = Router();
 
 taskRoutes.use(authenticate);
+// Before /:taskId, which would otherwise reject "my-assigned" as an invalid task id.
+taskRoutes.get("/my-assigned", organizationMemberAccess(), validate({ query: listMyTasksQuerySchema }), listMyTasks);
 taskRoutes.get("/:taskId", organizationMemberAccess(), validate({ params: taskIdParamsSchema }), getTask);
 // Owner: all fields. Assigned member: permitted fields only (checked in the service).
 taskRoutes.patch(

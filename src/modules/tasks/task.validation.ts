@@ -56,3 +56,13 @@ export const listTasksQuerySchema = paginationQuerySchema.extend({
   sortBy: z.enum(["createdAt", "dueDate", "priority", "title"]).default("createdAt"),
   sortOrder: sortOrderSchema,
 });
+
+/** GET /tasks/my-assigned – the caller's tasks across every live project of the organization. */
+export const listMyTasksQuerySchema = paginationQuerySchema.extend({
+  search: searchQuerySchema,
+  status: statusSchema.optional(),
+  priority: prioritySchema.optional(),
+  projectId: uuidSchema("project ID").optional(),
+  sortBy: z.enum(["createdAt", "dueDate", "priority", "title"]).default("createdAt"),
+  sortOrder: sortOrderSchema,
+});

@@ -12,6 +12,7 @@ import { assertTaskLimit, lockOrganization } from "../subscriptions/subscription
 import type {
   AssignTaskInput,
   CreateTaskInput,
+  ListMyTasksQuery,
   ListTasksQuery,
   UpdateTaskInput,
   UpdateTaskStatusInput,
@@ -179,6 +180,35 @@ const listProjectTasks = async (
   return { tasks, meta: buildPaginationMeta(query, total) };
 };
 
+/**
+ * Tasks assigned to the caller in their organization, across all projects.
+ * Deleted tasks and tasks of deleted projects are left out.
+ */
+const listMyTasks = async (context: OrganizationContext, actor: AuthUser, query: ListMyTasksQuery) => {
+  const where: Prisma.TaskWhereInput = {
+    organizationId: context.id,
+    assignedToId: actor.id,
+    deletedAt: null,
+    project: { deletedAt: null },
+    ...(query.projectId && { projectId: query.projectId }),
+    ...(query.status && { status: query.status }),
+    ...(query.priority && { priority: query.priority }),
+    ...(query.search && { title: { contains: query.search, mode: "insensitive" } }),
+  };
+
+  const [tasks, total] = await prisma.$transaction([
+    prisma.task.findMany({
+      where,
+      select: taskSelect,
+      orderBy: [{ [query.sortBy]: query.sortOrder }, { id: "asc" }],
+      ...getPaginationArgs(query),
+    }),
+    prisma.task.count({ where }),
+  ]);
+
+  return { tasks, meta: buildPaginationMeta(query, total) };
+};
+
 const getTask = async (context: OrganizationContext, taskId: string) =>
   stripInternal(await findTaskOrThrow(context.id, taskId));
 
@@ -295,6 +325,7 @@ const deleteTask = (context: OrganizationContext, actor: AuthUser, taskId: strin
 export const taskService = {
   createTask,
   listProjectTasks,
+  listMyTasks,
   getTask,
   updateTask,
   updateTaskStatus,
