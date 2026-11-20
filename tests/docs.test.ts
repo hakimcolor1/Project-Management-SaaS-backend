@@ -4,15 +4,23 @@ import { parse } from "yaml";
 import app from "../src/app.js";
 import { prisma } from "./helpers/db.js";
 
-/** Every endpoint the API implements (REQUIREMENTS §7–§13 plus /health and two admin extras). */
+/**
+ * Every endpoint the API implements: REQUIREMENTS §7–§13, plus /health, the
+ * Google redirect flow, the users module, my-assigned tasks, payment status
+ * tracking and two admin extras.
+ */
 const ENDPOINTS: readonly [method: string, path: string][] = [
   ["get", "/health"],
   ["post", "/auth/register"],
   ["post", "/auth/login"],
   ["post", "/auth/google"],
+  ["get", "/auth/google"],
+  ["get", "/auth/google/callback"],
   ["post", "/auth/refresh-token"],
   ["post", "/auth/logout"],
   ["get", "/auth/me"],
+  ["get", "/users/me"],
+  ["patch", "/users/me"],
   ["post", "/organizations"],
   ["get", "/organizations/current"],
   ["patch", "/organizations/current"],
@@ -27,6 +35,7 @@ const ENDPOINTS: readonly [method: string, path: string][] = [
   ["delete", "/projects/{projectId}"],
   ["post", "/projects/{projectId}/tasks"],
   ["get", "/projects/{projectId}/tasks"],
+  ["get", "/tasks/my-assigned"],
   ["get", "/tasks/{taskId}"],
   ["patch", "/tasks/{taskId}"],
   ["patch", "/tasks/{taskId}/status"],
@@ -38,6 +47,7 @@ const ENDPOINTS: readonly [method: string, path: string][] = [
   ["post", "/payments/validate"],
   ["post", "/payments/ipn"],
   ["get", "/payments/history"],
+  ["get", "/payments/{paymentId}"],
   ["get", "/admin/dashboard"],
   ["get", "/admin/organizations"],
   ["patch", "/admin/organizations/{id}/status"],

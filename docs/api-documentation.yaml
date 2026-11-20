@@ -8,7 +8,10 @@ info:
   description: |
     Multi-tenant Project Management SaaS REST API (B7A6 – Assignment 8).
 
-    **Authentication** – log in with `POST /auth/login` (or `/auth/google`). The access token
+    **Google sign-in** – open `GET /api/v1/auth/google` in a browser (redirect flow, no frontend
+    needed), or post a Google ID token to `POST /auth/google`. Both verify the ID token on the server.
+
+    **Authentication** – log in with `POST /auth/login` (or Google). The access token
     (15 min) is returned in the body and set as the HTTP-only `accessToken` cookie. Send it as
     `Authorization: Bearer <token>` (click **Authorize**) or rely on the cookie. Renew it with
     `POST /auth/refresh-token` – refresh tokens rotate on every use.
@@ -29,6 +32,8 @@ tags:
     description: Liveness and database connectivity.
   - name: Auth
     description: Registration, login (password or Google), token refresh, logout, current user.
+  - name: Users
+    description: The signed-in user's own profile (every role).
   - name: Organizations
     description: The caller's organization (one per user).
   - name: Members
@@ -139,6 +144,22 @@ paths:
         "429": { $ref: "#/components/responses/TooManyRequests" }
 
   /auth/google:
+    get:
+      tags: [Auth]
+      summary: Start Google OAuth sign-in in a browser (redirect flow)
+      description: |
+        Open this URL in a browser (not via "Try it out": it is a redirect). The server redirects to
+        Google's consent screen with a random `state` and a PKCE `S256` code challenge, both kept in
+        a 10-minute HTTP-only `googleOAuthState` cookie. Google then redirects to
+        `/auth/google/callback`. Needs `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`, otherwise `503`.
+      security: []
+      responses:
+        "302":
+          description: Redirect to `https://accounts.google.com/o/oauth2/v2/auth?...`. Sets the `googleOAuthState` cookie.
+          headers:
+            Location: { schema: { type: string, format: uri } }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
     post:
       tags: [Auth]
       summary: Log in with a Google ID token
@@ -164,6 +185,31 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "409": { $ref: "#/components/responses/Conflict" }
         "422": { $ref: "#/components/responses/ValidationError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /auth/google/callback:
+    get:
+      tags: [Auth]
+      summary: Google OAuth callback (called by Google, not by clients)
+      description: |
+        Google redirects here (`GOOGLE_CALLBACK_URL`, default `BACKEND_URL/api/v1/auth/google/callback`).
+        The server checks `state` against the one-time cookie, exchanges `code` for tokens
+        server-to-server with the client secret and the PKCE verifier, then verifies the returned
+        Google ID token (signature, issuer, audience, verified email) and applies the same safe
+        account-linking rules as `POST /auth/google`. On success it sets the auth cookies and
+        returns the user and tokens.
+      security: []
+      parameters:
+        - { name: code, in: query, schema: { type: string }, description: Authorization code from Google }
+        - { name: state, in: query, schema: { type: string }, description: Must match the `googleOAuthState` cookie }
+        - { name: error, in: query, schema: { type: string }, description: Set by Google when the user cancels (e.g. `access_denied`) }
+      responses:
+        "200": { $ref: "#/components/responses/AuthSuccess" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
   /auth/refresh-token:
@@ -209,8 +255,40 @@ paths:
       tags: [Auth]
       summary: Current user with their organization
       responses:
+        "200": { $ref: "#/components/responses/ProfileSuccess" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  # ────────────────────────────── Users ──────────────────────────────
+  /users/me:
+    get:
+      tags: [Users]
+      summary: My profile with my organization (every role; same data as /auth/me)
+      responses:
+        "200": { $ref: "#/components/responses/ProfileSuccess" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    patch:
+      tags: [Users]
+      summary: Update my name and/or avatar (every role)
+      description: |
+        Only `name` and `avatar` can be changed. Unknown or protected fields (`email`, `role`,
+        `isActive`, `password`, …) are rejected with `422` – no mass assignment. `avatar: null`
+        removes the avatar.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                name: { type: string, minLength: 2, maxLength: 100, example: Jane Doe }
+                avatar: { type: string, format: uri, nullable: true, maxLength: 500, description: An https URL, example: "https://cdn.example.com/avatars/jane.png" }
+      responses:
         "200":
-          description: Current user
+          description: Updated profile
           content:
             application/json:
               schema:
@@ -218,23 +296,10 @@ paths:
                   - $ref: "#/components/schemas/Success"
                   - type: object
                     properties:
-                      data:
-                        allOf:
-                          - $ref: "#/components/schemas/User"
-                          - type: object
-                            properties:
-                              organization:
-                                nullable: true
-                                type: object
-                                properties:
-                                  id: { type: string, format: uuid }
-                                  name: { type: string }
-                                  slug: { type: string }
-                                  status: { $ref: "#/components/schemas/OrganizationStatus" }
-                                  isOwner: { type: boolean }
-                                  joinedAt: { type: string, format: date-time }
+                      data: { $ref: "#/components/schemas/User" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/ValidationError" }
 
   # ─────────────────────────── Organizations ───────────────────────────
   /organizations:
@@ -573,6 +638,38 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "422": { $ref: "#/components/responses/ValidationError" }
 
+  /tasks/my-assigned:
+    get:
+      tags: [Tasks]
+      summary: Tasks assigned to me across all projects of my organization (owner or member)
+      description: |
+        Excludes deleted tasks and tasks of deleted projects. `SUPER_ADMIN` has no organization → `403`;
+        a user without an organization → `404`.
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Search"
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/TaskStatus" } }
+        - { name: priority, in: query, schema: { $ref: "#/components/schemas/TaskPriority" } }
+        - { name: projectId, in: query, schema: { type: string, format: uuid } }
+        - { name: sortBy, in: query, schema: { type: string, enum: [createdAt, dueDate, priority, title], default: createdAt } }
+        - $ref: "#/components/parameters/SortOrder"
+      responses:
+        "200":
+          description: My assigned tasks
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessList"
+                  - type: object
+                    properties:
+                      data: { type: array, items: { $ref: "#/components/schemas/Task" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
   /tasks/{taskId}:
     parameters:
       - $ref: "#/components/parameters/TaskId"
@@ -851,6 +948,33 @@ paths:
                       data: { type: array, items: { $ref: "#/components/schemas/Payment" } }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+  /payments/{paymentId}:
+    parameters:
+      - name: paymentId
+        in: path
+        required: true
+        description: The payment id (UUID) **or** its `transactionId` (the gateway result redirect carries the transaction id).
+        schema: { type: string, example: TF1A2B3C4D5E6F7G8H9J }
+    get:
+      tags: [Payments]
+      summary: Track one payment's status (owner)
+      description: Looked up within the caller's organization only; another organization's payment → `404`. The raw gateway response is never returned.
+      responses:
+        "200":
+          description: Payment
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Success"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Payment" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
   # ────────────────────────────── Admin ──────────────────────────────
   /admin/dashboard:
     get:
@@ -1070,6 +1194,30 @@ components:
                       - type: object
                         properties:
                           user: { $ref: "#/components/schemas/User" }
+    ProfileSuccess:
+      description: The signed-in user with their organization (`null` when they have none).
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Success"
+              - type: object
+                properties:
+                  data:
+                    allOf:
+                      - $ref: "#/components/schemas/User"
+                      - type: object
+                        properties:
+                          organization:
+                            nullable: true
+                            type: object
+                            properties:
+                              id: { type: string, format: uuid }
+                              name: { type: string }
+                              slug: { type: string }
+                              status: { $ref: "#/components/schemas/OrganizationStatus" }
+                              isOwner: { type: boolean }
+                              joinedAt: { type: string, format: date-time }
     EmptySuccess:
       description: Success without data
       content:
@@ -1352,8 +1500,15 @@ components:
         status: { $ref: "#/components/schemas/PaymentStatus" }
         paidAt: { type: string, format: date-time, nullable: true }
         createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
         plan: { type: string, example: PRO }
-        subscription: { type: object, properties: { id: { type: string }, status: { $ref: "#/components/schemas/SubscriptionStatus" } } }
+        subscription:
+          type: object
+          properties:
+            id: { type: string, format: uuid }
+            status: { $ref: "#/components/schemas/SubscriptionStatus" }
+            startDate: { type: string, format: date-time, nullable: true }
+            endDate: { type: string, format: date-time, nullable: true }
 
     DashboardStats:
       type: object

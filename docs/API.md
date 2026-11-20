@@ -12,11 +12,13 @@
 | --- | --- | --- |
 | Sign up | `POST /auth/register` `{ name, email, password }` | Creates a **TEAM_OWNER** account. A `role` field is rejected (422). |
 | Log in | `POST /auth/login` `{ email, password }` | Access token (15 min) and refresh token (7 days) |
-| Google | `POST /auth/google` `{ idToken }` | Same result. The Google ID token is verified on the server. |
+| Google (browser) | Open `GET /auth/google` in a browser | Redirects to Google; Google returns to `GET /auth/google/callback`, which signs you in (cookies + user + tokens). No frontend needed. |
+| Google (ID token) | `POST /auth/google` `{ idToken }` | Same result, for frontends using Google Identity Services. |
 | Use the API | `Authorization: Bearer <accessToken>` **or** the `accessToken` cookie | |
 | Renew | `POST /auth/refresh-token` (cookie, or `{ refreshToken }` in the body) | A new token pair. The old refresh token is revoked. |
 | Log out | `POST /auth/logout` | The refresh token is revoked and the cookies are cleared. |
-| Who am I | `GET /auth/me` | The user and their organization (or `null`) |
+| Who am I | `GET /auth/me` or `GET /users/me` | The user and their organization (or `null`) |
+| Edit profile | `PATCH /users/me` `{ name?, avatar? }` | Only name and avatar (https URL, `null` removes it). Any other field → 422. |
 
 Token details:
 
@@ -25,11 +27,17 @@ Token details:
 - **Rotation.** Every refresh revokes the presented token. Presenting a revoked token again is treated as theft and **signs the user out everywhere**.
 - **Storage.** Only a SHA-256 hash of each refresh token is stored. Passwords are hashed with bcrypt (cost 12).
 - **Password rules:** 8+ characters (max 72 bytes) with an upper-case letter, a lower-case letter and a number.
-- **Google login:**
+- **Google login (both flows):**
+  - Identity comes **only** from a Google ID token verified on the server: signature, expiry, issuer, audience (`GOOGLE_CLIENT_ID`) and a verified email. Client-sent profile data is never trusted.
   - New emails become TEAM_OWNER accounts.
   - An existing account is linked by email. If that account's email was never verified, its password is removed and its sessions revoked, so whoever registered the address first can't keep access.
   - SUPER_ADMIN accounts cannot use Google login.
-  - Without `GOOGLE_CLIENT_ID` the endpoint returns 503.
+  - `POST /auth/google` needs `GOOGLE_CLIENT_ID`; the redirect flow also needs `GOOGLE_CLIENT_SECRET`. Without them the endpoints return 503.
+- **Google redirect flow (Passport, `src/config/passport.ts`):**
+  - `GET /auth/google` sets a one-time, 10-minute `HttpOnly; SameSite=Lax` cookie holding a random `state` (CSRF protection) and a PKCE verifier. It then redirects to Google with the `state` and an `S256` code challenge.
+  - `GET /auth/google/callback` rejects a missing or mismatched `state` (401), a cancelled consent screen (401) and a missing `code` (400). It then exchanges the code server-to-server with the client secret and the PKCE verifier, and verifies the returned ID token as above.
+  - No server sessions are used, so it works on Vercel serverless.
+  - The GCP OAuth client must list `GOOGLE_CALLBACK_URL` (default `BACKEND_URL/api/v1/auth/google/callback`) as an authorized redirect URI.
 
 ## 2. Roles and permissions
 
@@ -39,12 +47,14 @@ Token details:
 | Create an organization (one per user) | – | ✅ | ❌ |
 | View own organization | – | ✅ | ✅ |
 | Update organization / manage members | – | ✅ | ❌ |
+| View / edit own profile (`/users/me`) | ✅ | ✅ | ✅ |
 | View projects and tasks | – | ✅ | ✅ |
+| View my assigned tasks (`/tasks/my-assigned`) | – | ✅ | ✅ |
 | Create / update / delete projects | – | ✅ | ❌ |
 | Create / assign / delete tasks | – | ✅ | ❌ |
 | Update a task | – | ✅ all fields | ✅ description only, on tasks **assigned to them** |
 | Change task status | – | ✅ any status | ✅ own tasks, following the workflow |
-| View subscription / pay / payment history | – | ✅ | ❌ |
+| View subscription / pay / payment history and status | – | ✅ | ❌ |
 | `/admin/*` (stats, organizations, users, payments, audit logs, plans) | ✅ | ❌ | ❌ |
 
 How this is enforced:
@@ -91,8 +101,10 @@ How this is enforced:
 | --- | --- | --- |
 | GET | `/health` | public |
 | POST | `/auth/register`, `/auth/login`, `/auth/google` | public (rate limited: 20 / 15 min / IP) |
+| GET | `/auth/google`, `/auth/google/callback` | public, browser redirect flow (same rate limit) |
 | POST | `/auth/refresh-token`, `/auth/logout` | refresh token |
 | GET | `/auth/me` | authenticated |
+| GET, PATCH | `/users/me` | authenticated (every role) |
 | POST | `/organizations` | TEAM_OWNER |
 | GET | `/organizations/current` | owner, member |
 | PATCH | `/organizations/current` | owner |
@@ -101,6 +113,7 @@ How this is enforced:
 | POST, GET | `/projects` | owner (POST), owner/member (GET) |
 | GET, PATCH, DELETE | `/projects/:projectId` | owner/member (GET), owner |
 | POST, GET | `/projects/:projectId/tasks` | owner (POST), owner/member (GET) |
+| GET | `/tasks/my-assigned` | owner/member: tasks assigned to me in every project (pagination, `status`, `priority`, `projectId`, `search`, `sortBy`) |
 | GET, PATCH | `/tasks/:taskId` | owner/member (PATCH limited for members) |
 | PATCH | `/tasks/:taskId/status` | owner, assigned member |
 | PATCH | `/tasks/:taskId/assign` | owner |
@@ -110,6 +123,7 @@ How this is enforced:
 | POST | `/payments/initiate` | owner |
 | POST | `/payments/validate`, `/payments/ipn` | SSLCommerz callbacks |
 | GET | `/payments/history` | owner |
+| GET | `/payments/:paymentId` | owner: one payment's status, by id **or** `transactionId` |
 | GET | `/admin/dashboard`, `/admin/organizations`, `/admin/users`, `/admin/payments`, `/admin/audit-logs` | SUPER_ADMIN |
 | PATCH | `/admin/organizations/:id/status`, `/admin/plans/:planId` | SUPER_ADMIN |
 
@@ -184,6 +198,7 @@ Authorization: Bearer eyJ…
 4. The server calls the **SSLCommerz validation API** with `val_id`. It checks the status (`VALID`/`VALIDATED`), the transaction id, the amount and the currency against its own record. IPN requests must also carry a valid `verify_sign`.
 5. Only then are the payment marked `SUCCESS` and the subscription `ACTIVE`, both in one database transaction. Duplicate callbacks are idempotent (`alreadyProcessed: true`).
 6. The browser is redirected to `FRONTEND_URL/payment/result?status=success|failed|cancelled&transactionId=…`.
+7. Status tracking: `GET /payments/:transactionId` (or the payment id) returns that payment's status, amount, plan and subscription period. `GET /payments/history` lists every payment, and `GET /subscriptions/current` shows the effective plan.
 
 A success redirect **without** `val_id`, or with a forged one, never activates anything. Without SSLCommerz credentials, `/payments/initiate` returns `503`.
 
@@ -208,6 +223,6 @@ A success redirect **without** `val_id`, or with a forged one, never activates a
 3. Run the collection top to bottom; the requests chain together.
    - Test scripts save `accessToken`, `refreshToken`, `organizationId`, `projectId`, `taskId`, `memberId`, `memberUserId`, `planId` and `transactionId`.
    - The member and admin folders log in as those users first.
-4. Verified with Newman (Postman's CLI runner) against a local server: **53/53 requests and 53/53 assertions pass**.
+4. Verified with Newman (Postman's CLI runner) against a local production build with the SSLCommerz sandbox store: **59/59 requests and 65/65 assertions pass** (2026-11-20).
    - Re-running within 15 minutes from the same IP can hit the auth rate limit (20 requests).
    - Registering an existing email returns 409, which the test accepts.

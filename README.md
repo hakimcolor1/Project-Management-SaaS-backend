@@ -12,9 +12,13 @@ Multi-tenant REST API for TeamFlow. Each organization gets an isolated workspace
 
 - **Authentication:**
   - email/password registration and login
-  - Google sign-in (the ID token is verified on the server)
+  - Google sign-in (GCP OAuth), in two ways:
+    - a browser redirect flow (`GET /auth/google`), using Passport with PKCE and a one-time state cookie, so no frontend is needed
+    - an ID-token flow for frontends (`POST /auth/google`)
+    - both verify the Google ID token on the server
   - JWT access tokens with rotating refresh tokens in HTTP-only cookies
   - refresh-token reuse detection, and logout
+- **Users:** `GET/PATCH /users/me` to view and edit your own profile (name and avatar only).
 - **Three roles:** `SUPER_ADMIN` (seeded), `TEAM_OWNER` (every sign-up), `TEAM_MEMBER` (added by an owner). Checks happen at the role level **and** the organization level.
 - **Organizations and members:** one organization per owner; add existing accounts by email; activate/deactivate or remove members; plan member limits.
 - **Projects:** create, read, update and soft-delete, with search, status filter, sorting, pagination and a progress % calculated from completed tasks.
@@ -23,14 +27,19 @@ Multi-tenant REST API for TeamFlow. Each organization gets an isolated workspace
   - assignment, restricted to active members of the organization
   - a status workflow; members may edit only the description and status of their own tasks
   - due-date checks, filters and pagination
+  - `GET /tasks/my-assigned`: my tasks across every project of my organization
 - **Subscriptions:** FREE and PRO plans, limits enforced on the server under row locks, and expiry handling.
 - **SSLCommerz payments:**
   - session start, then validation through SSLCommerz's own validation API
   - IPN signature check
   - idempotent activation; renewing early extends the current period
+  - status tracking with `GET /payments/:paymentId` (by id or transaction id) and `GET /payments/history`
 - **Super Admin:** statistics from the database, organization suspend/reactivate, users, payments, audit logs, plan management.
 - **Audit log** for organization, member, project, task, payment and plan changes.
-- **Upstash Redis** caches the plan list and the admin dashboard, with expiry and invalidation. Payments and subscriptions are never cached.
+- **Upstash Redis caching** of the plan list (10 min) and the admin dashboard (60 s), with expiry and invalidation.
+  - Payments and subscriptions are never cached.
+  - If Redis fails, the API falls back to PostgreSQL.
+  - Caching is active only when `REDIS_URL` / `REDIS_TOKEN` are set. See [Deployment](#deployment) for the production status.
 - **Security:**
   - Helmet, a CORS allow-list and rate limiting
   - Zod validation everywhere, and strict request bodies (protection against mass assignment)
@@ -45,7 +54,7 @@ Multi-tenant REST API for TeamFlow. Each organization gets an isolated workspace
 | Framework | Express 5 |
 | Database | PostgreSQL + Prisma 7 (`pg` driver adapter, migrations) |
 | Validation | Zod 4 |
-| Auth | jsonwebtoken, bcrypt, google-auth-library |
+| Auth | jsonwebtoken, bcrypt, google-auth-library, Passport (passport-google-oauth20) |
 | Cache | Upstash Redis (REST) |
 | Payments | SSLCommerz v4 API (sandbox / live) |
 | Docs | OpenAPI 3 + Swagger UI, Postman |
@@ -77,7 +86,9 @@ Every variable is validated at startup (`src/config/env.ts`). If anything is mis
 | `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET` | ✅ | Two **different** secrets, 32+ characters each |
 | `JWT_ACCESS_EXPIRES_IN`, `JWT_REFRESH_EXPIRES_IN` | – | Default `15m` / `7d` |
 | `FRONTEND_URL`, `BACKEND_URL` | – | CORS origin, payment redirect URLs and gateway callback URLs |
-| `GOOGLE_CLIENT_ID` | for Google login | GCP OAuth client ID. Without it, `/auth/google` returns 503. |
+| `GOOGLE_CLIENT_ID` | for Google login | GCP OAuth client ID. Enough for `POST /auth/google`. |
+| `GOOGLE_CLIENT_SECRET` | for the Google redirect flow | Also needed for `GET /auth/google`. Without the Google variables, those endpoints return 503. |
+| `GOOGLE_CALLBACK_URL` | – | Default `BACKEND_URL/api/v1/auth/google/callback`. It must be an authorized redirect URI of the OAuth client. |
 | `SSL_STORE_ID`, `SSL_STORE_PASSWORD`, `SSL_IS_LIVE` | for payments | Without them, `/payments/initiate` returns 503 |
 | `REDIS_URL`, `REDIS_TOKEN` | – | Upstash REST URL + token. Without them, caching is skipped. |
 | `DEMO_ADMIN_EMAIL`, `DEMO_ADMIN_PASSWORD` | for the seed | The SUPER_ADMIN account |
@@ -124,6 +135,18 @@ Every variable is validated at startup (`src/config/env.ts`). If anything is mis
 
 This flow was verified end to end against the real sandbox on 2026-11-20 (see [DEVELOPMENT_PROGRESS.md](DEVELOPMENT_PROGRESS.md#final-qa--real-sandbox-payment-2026-11-20-)).
 
+## Google sign-in setup
+
+1. **Create the OAuth client.** In Google Cloud Console → *APIs & Services*:
+   - configure the *OAuth consent screen* (External; add yourself as a test user while it is in testing)
+   - then go to *Credentials* → *Create credentials* → *OAuth client ID* → *Web application*
+2. **Authorized redirect URIs:** `https://<your-api>/api/v1/auth/google/callback`. For local use, also add `http://localhost:5000/api/v1/auth/google/callback`.
+3. **Authorized JavaScript origins** are only needed if a frontend uses Google Identity Services for `POST /auth/google`.
+4. **Set the variables and redeploy.** Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`, e.g. `vercel env add GOOGLE_CLIENT_ID production`, then redeploy.
+5. **Sign in.** Open `https://<your-api>/api/v1/auth/google` in a browser and choose a Google account.
+   - The callback responds with the new TEAM_OWNER account (or your linked existing one), sets the auth cookies and returns the tokens.
+   - `GET /api/v1/auth/me` in the same browser then shows you signed in.
+
 ## Deployment
 
 - **Live API:** https://teamflow-backend-two.vercel.app (base path `/api/v1`)
@@ -162,9 +185,10 @@ After adding a variable, redeploy so it takes effect.
 ```text
 prisma/schema/    schema.prisma (generator + datasource), <service>.prisma models, enums/
 prisma/           migrations/, seed.ts
-src/config/       env validation, Prisma client, Google, SSLCommerz, Redis
+src/config/       env validation, Prisma client, Google ID-token verifier, Passport (Google OAuth), SSLCommerz, Redis
 src/middlewares/  authenticate, authorize, organization scope, validate, rate limits, errors, 404
-src/modules/      auth, organizations, projects, tasks, subscriptions, payments, admin, docs, health
+src/modules/      auth, users, organizations, projects, tasks, subscriptions, payments, admin, docs, health
+                  (each: <name>.route / .controller / .service / .validation [/ .interface] .ts)
 src/utils/        response, errors, pagination, password, JWT, cookies, audit log, cache, validation
 src/routes/       mounts module routers under /api/v1
 docs/             OpenAPI (Swagger) spec, API guide, Postman collection + environment

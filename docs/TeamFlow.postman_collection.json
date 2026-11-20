@@ -223,6 +223,124 @@
           }
         },
         {
+          "name": "My profile",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"No password or googleId exposed\", () => { const d = pm.response.json().data; pm.expect(d).to.not.have.property(\"password\"); pm.expect(d).to.not.have.property(\"googleId\"); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/users/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "me"
+              ]
+            },
+            "description": "Users module: the signed-in user's profile with their organization (same data as /auth/me). Every role."
+          }
+        },
+        {
+          "name": "Update my profile",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Name updated\", () => pm.expect(pm.response.json().data.name).to.eql(\"Demo Owner\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Demo Owner\",\n  \"avatar\": \"https://avatars.githubusercontent.com/u/9919\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/users/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "me"
+              ]
+            },
+            "description": "Only `name` and `avatar` (https URL, or null to remove) can be changed."
+          }
+        },
+        {
+          "name": "Update my profile – protected field (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));",
+                  "pm.test(\"Structured error\", () => pm.expect(pm.response.json().success).to.eql(false));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"role\": \"SUPER_ADMIN\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/users/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "me"
+              ]
+            },
+            "description": "Mass-assignment protection: role, email, isActive, password … are rejected."
+          }
+        },
+        {
           "name": "Refresh token (rotate)",
           "event": [
             {
@@ -316,6 +434,42 @@
               ]
             },
             "description": "Requires GOOGLE_CLIENT_ID on the server (503 otherwise) and a real Google ID token."
+          }
+        },
+        {
+          "name": "Google OAuth redirect (open in a browser)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of 302/503\", () => pm.expect(pm.response.code).to.be.oneOf([302, 503]));",
+                  "if (pm.response.code === 302) { pm.test(\"Redirects to Google\", () => pm.expect(pm.response.headers.get(\"Location\")).to.match(/^https:\\/\\/accounts\\.google\\.com\\//)); }"
+                ]
+              }
+            }
+          ],
+          "protocolProfileBehavior": {
+            "followRedirects": false
+          },
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/auth/google",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "google"
+              ]
+            },
+            "description": "Redirect flow: open {{baseUrl}}/auth/google in a browser, pick a Google account, and Google redirects to /auth/google/callback, which signs you in (sets cookies, returns user + tokens). Here Postman only checks the redirect. Needs GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET on the server (503 otherwise)."
           }
         },
         {
@@ -1430,6 +1584,50 @@
           }
         },
         {
+          "name": "Member: my assigned tasks",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Contains the completed task\", () => { const ids = pm.response.json().data.map((t) => t.id); pm.expect(ids).to.include(pm.environment.get(\"taskId\")); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/tasks/my-assigned?page=1&limit=10&status=COMPLETED",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "tasks",
+                "my-assigned"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "10"
+                },
+                {
+                  "key": "status",
+                  "value": "COMPLETED"
+                }
+              ]
+            },
+            "description": "Tasks assigned to the caller across every project of their organization (owner or member)."
+          }
+        },
+        {
           "name": "Login (owner)",
           "event": [
             {
@@ -1613,6 +1811,38 @@
               ]
             },
             "description": "Open the returned gatewayUrl in a browser and pay with an SSLCommerz sandbox test card. The gateway then calls /payments/validate and /payments/ipn."
+          }
+        },
+        {
+          "name": "Payment status (by transactionId)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json().data;",
+                  "pm.test(\"Same transaction\", () => pm.expect(d.transactionId).to.eql(pm.environment.get(\"transactionId\")));",
+                  "pm.test(\"Has a payment status\", () => pm.expect(d.status).to.be.oneOf([\"PENDING\", \"SUCCESS\", \"FAILED\", \"CANCELLED\"]));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/payments/{{transactionId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payments",
+                "{{transactionId}}"
+              ]
+            },
+            "description": "Track one payment by its id or transactionId (owner, own organization only)."
           }
         },
         {
