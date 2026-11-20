@@ -32,6 +32,47 @@ Source of truth: `../REQUIREMENTS.md`. One phase at a time; each phase ends with
 
 ---
 
+## Final QA – real sandbox payment (2026-11-20) ✅
+
+The last unverified payment step was completing a checkout in a browser. It was done with a headless Chromium against the real SSLCommerz sandbox (public `testbox` store).
+
+**Production (<https://teamflow-backend-two.vercel.app>), cancel path.** A QA owner `qa.sandbox.payment.*@example.com` with org "QA Sandbox Org …" started a PRO payment. On the sandbox checkout, "Cancel this transaction" was clicked.
+
+- SSLCommerz posted to the production `/payments/validate` callback.
+- The payment and its pending subscription became `CANCELLED`, and the org stayed on FREE.
+- The browser was then redirected to `FRONTEND_URL/payment/result?status=cancelled…`.
+
+**Local production build (`NODE_ENV=production`, local Docker DB, same sandbox store), success path:**
+
+| Check | Result |
+| --- | --- |
+| Checkout shows the right amount | "PAY 1,500 BDT" |
+| Pay (Mobile Banking → DBBL → sandbox "Success") | Gateway posted to `/payments/validate`. The server re-validated with SSLCommerz's validation API and redirected to `…/payment/result?status=success` |
+| Subscription activated | `GET /subscriptions/current` → **PRO, ACTIVE**, 2026-11-20 → 2026-12-20 (30 days) |
+| Payment recorded | `GET /payments/history` → `SUCCESS`, `paidAt` set. Stored gateway response: `status=VALID`, `amount=1500.00`, `val_id` kept, no card data |
+| Duplicate callback (same `val_id`, sent twice) | `alreadyProcessed: true`. End date unchanged. Exactly one `PAYMENT_SUCCEEDED` audit entry |
+| Forged success with a fake `val_id` on a new pending payment | SSLCommerz answered `INVALID_TRANSACTION`. Payment → `FAILED`, nothing activated or extended |
+| Forged success without `val_id` | `FAILED`: "No validation ID supplied – payment not verified" |
+| IPN without a valid signature | 400 "Invalid IPN signature" |
+| Unknown transaction | 404 "Payment not found for this transaction" |
+
+Notes:
+
+- **Why local for the card step:** test payment details are only entered against the app on a local or test host, never against the production deployment. Production was used for the cancel path, which needs no payment details.
+- **Sandbox card form:** on 2026-11-20 the sandbox card form rejected every expiry date, and its EMI lookup returned 500. That is an SSLCommerz-side problem. The Mobile Banking simulator ("Success" / "Failed" buttons) works, and the README walkthrough now says so.
+- **Gateway redirect target:** after a payment the browser goes to `FRONTEND_URL/payment/result`. This repo is backend-only, so that page only exists once a frontend is deployed. The result is always readable via `GET /payments/history` and `GET /subscriptions/current`.
+- Quality gates on 2026-11-20: `bun run typecheck` ✅ · `bun run lint` ✅ · `bun run test` ✅ **158/158**. Live `/api/v1/health` → database `connected`. `/api-docs` → 200.
+
+### Still open – needs the account owner
+
+| Item | Why it can't be finished from code | What to do |
+| --- | --- | --- |
+| **Google OAuth Client ID** | Needs a GCP project and an OAuth consent screen in your Google account. | GCP Console → APIs & Services → Credentials → *Create OAuth client ID* (Web). Add your frontend origin(s) as *Authorized JavaScript origins*. Then `vercel env add GOOGLE_CLIENT_ID production` and redeploy. `POST /auth/google` starts working without code changes. |
+| **Upstash Redis** | Installing a Marketplace integration needs a person to accept its terms. | `vercel integration add upstash` (or Vercel dashboard → Storage → Upstash Redis, free plan). Then set `REDIS_URL` = the REST URL and `REDIS_TOKEN` = the REST token on Production and redeploy. Caching starts automatically. |
+| **Demo video** (5–10 min) | Must be recorded by you. | Suggested flow: Swagger tour → register/login → org + member → project + tasks (member workflow, 403s) → PRO payment in the sandbox → admin dashboard with the seeded SUPER_ADMIN. |
+
+---
+
 ## Phase 9 – Deployment & final QA ✅
 
 **Live API:** https://teamflow-backend-two.vercel.app · **Docs:** https://teamflow-backend-two.vercel.app/api-docs
@@ -68,7 +109,7 @@ Source of truth: `../REQUIREMENTS.md`. One phase at a time; each phase ends with
   - `/auth/google` → "not configured" (honest 503)
   - HSTS, `nosniff` and `RateLimit` headers are present
   - `/.env` and `/dist/app.js` are not served (404)
-- **Not verified in a browser:** finishing a payment on the SSLCommerz sandbox checkout page. The Chrome extension was not connected. Initiation against production works and returns a real `sandbox.sslcommerz.com` checkout URL. See "Sandbox payment walkthrough" in README.md.
+- Finishing a payment on the SSLCommerz sandbox checkout page was verified in a browser on 2026-11-20. See "Final QA – real sandbox payment" above.
 
 ---
 

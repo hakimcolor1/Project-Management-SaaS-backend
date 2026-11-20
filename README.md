@@ -113,9 +113,16 @@ Every variable is validated at startup (`src/config/env.ts`). If anything is mis
 1. Set SSLCommerz sandbox credentials. SSLCommerz's public demo store works: `SSL_STORE_ID=testbox`, `SSL_STORE_PASSWORD=qwerty`, `SSL_IS_LIVE=false`.
 2. Set `BACKEND_URL` to the API's public URL. For a local run, `http://localhost:5000` works for the browser redirect, but IPN needs a public URL.
 3. As an owner with an organization, get the PRO plan id from `GET /plans`, then call `POST /payments/initiate { "planId": "…" }`.
-4. Open the returned `gatewayUrl` in a browser and pay with an **SSLCommerz sandbox test card**, using the test details shown on the sandbox page or in the SSLCommerz developer docs.
-5. SSLCommerz posts back to `/payments/validate` and `/payments/ipn`. The server re-validates the payment with SSLCommerz, then activates PRO.
-6. Check it: `GET /subscriptions/current` shows `PRO`, and `GET /payments/history` shows `SUCCESS`.
+4. Open the returned `gatewayUrl` in a browser and pay in the sandbox.
+   - **Easiest:** *Mobile Banking* → *DBBL* → the sandbox "OTP Page" → **Success**. "Failed" tests the failure path.
+   - **Card:** use an SSLCommerz sandbox test card from their developer docs. On 2026-11-20 the sandbox card form rejected every expiry date (an SSLCommerz-side problem), so use Mobile Banking if that happens.
+   - **Cancel:** "Cancel this transaction" tests the cancel path.
+5. SSLCommerz posts back to `/payments/validate` and `/payments/ipn`.
+   - The server re-validates the payment with SSLCommerz's validation API, then activates PRO.
+   - The browser is then redirected to `FRONTEND_URL/payment/result?status=…&transactionId=…`. That page belongs to a frontend, so with no frontend running the browser shows a connection error. That is expected.
+6. Check it: `GET /subscriptions/current` shows `PRO`, and `GET /payments/history` shows `SUCCESS`. Replaying the same callback returns `alreadyProcessed: true` and does not extend the plan again.
+
+This flow was verified end to end against the real sandbox on 2026-11-20 (see [DEVELOPMENT_PROGRESS.md](DEVELOPMENT_PROGRESS.md#final-qa--real-sandbox-payment-2026-11-20-)).
 
 ## Deployment
 
