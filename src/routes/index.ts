@@ -7,6 +7,7 @@ import { projectRoutes } from "../modules/projects/project.route.js";
 import { paymentRoutes } from "../modules/payments/payment.route.js";
 import { planRoutes, subscriptionRoutes } from "../modules/subscriptions/subscription.route.js";
 import { projectTaskRoutes, taskRoutes } from "../modules/tasks/task.route.js";
+import { userRoutes } from "../modules/users/user.route.js";
 
 /** All versioned API routes, mounted under /api/v1 in app.ts. */
 export const apiRouter = Router();
@@ -14,6 +15,7 @@ export const apiRouter = Router();
 const moduleRoutes: { path: string; router: Router }[] = [
   { path: "/health", router: healthRoutes },
   { path: "/auth", router: authRoutes },
+  { path: "/users", router: userRoutes },
   { path: "/organizations", router: organizationRoutes },
   // Nested task routes are mounted before /projects so they match first.
   { path: "/projects/:projectId/tasks", router: projectTaskRoutes },
@@ -23,7 +25,6 @@ const moduleRoutes: { path: string; router: Router }[] = [
   { path: "/subscriptions", router: subscriptionRoutes },
   { path: "/payments", router: paymentRoutes },
   { path: "/admin", router: adminRoutes },
-  // Further modules (organizations, projects, …) are added phase by phase.
 ];
 
 for (const { path, router } of moduleRoutes) {

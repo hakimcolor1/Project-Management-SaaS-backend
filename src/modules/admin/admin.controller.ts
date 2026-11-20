@@ -1,13 +1,12 @@
 import type { RequestHandler } from "express";
 import { getAuthUser } from "../../middlewares/auth.middleware.js";
 import { sendSuccess } from "../../utils/response.js";
+import type { UpdatePlanInput } from "../subscriptions/subscription.interface.js";
 import type {
   ListAuditLogsQuery,
   ListOrganizationsQuery,
   ListPaymentsQuery,
-  ListUsersQuery,
   UpdateOrganizationStatusInput,
-  UpdatePlanInput,
 } from "./admin.interface.js";
 import { adminService } from "./admin.service.js";
 
@@ -28,11 +27,6 @@ export const updateOrganizationStatus: RequestHandler = async (req, res) => {
   );
   const verb = organization.status === "SUSPENDED" ? "suspended" : "reactivated";
   sendSuccess(res, { message: `Organization ${verb} successfully`, data: organization });
-};
-
-export const listUsers: RequestHandler = async (req, res) => {
-  const { users, meta } = await adminService.listUsers(req.query as unknown as ListUsersQuery);
-  sendSuccess(res, { message: "Users retrieved successfully", data: users, meta });
 };
 
 export const listPayments: RequestHandler = async (req, res) => {

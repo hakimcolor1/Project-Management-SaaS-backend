@@ -5,16 +5,14 @@ import { AuditAction, AuditEntity, recordAuditLog } from "../../utils/audit-log.
 import { CacheKeys, CacheTtlSeconds, getOrSetCache, invalidateCache } from "../../utils/cache.js";
 import { buildPaginationMeta, getPaginationArgs } from "../../utils/pagination.js";
 import type { AuthUser } from "../auth/auth.interface.js";
-import { publicUserSelect } from "../auth/auth.service.js";
 import { FREE_PLAN_NAME } from "../subscriptions/subscription.constant.js";
+import type { UpdatePlanInput } from "../subscriptions/subscription.interface.js";
 import { toPlanView } from "../subscriptions/subscription.service.js";
 import type {
   ListAuditLogsQuery,
   ListOrganizationsQuery,
   ListPaymentsQuery,
-  ListUsersQuery,
   UpdateOrganizationStatusInput,
-  UpdatePlanInput,
 } from "./admin.interface.js";
 
 const THIRTY_DAYS_MS = 30 * 86_400_000;
@@ -202,37 +200,7 @@ const updateOrganizationStatus = (actor: AuthUser, organizationId: string, input
     return updated;
   });
 
-// ── Users, payments, audit logs ──────────────────────────────────────
-
-const listUsers = async (query: ListUsersQuery) => {
-  const where: Prisma.UserWhereInput = {
-    ...(query.role && { role: query.role }),
-    ...(query.isActive !== undefined && { isActive: query.isActive }),
-    ...(query.search && {
-      OR: [
-        { name: { contains: query.search, mode: "insensitive" } },
-        { email: { contains: query.search, mode: "insensitive" } },
-      ],
-    }),
-  };
-  const [users, total] = await prisma.$transaction([
-    prisma.user.findMany({
-      where,
-      orderBy: { createdAt: "desc" },
-      select: {
-        ...publicUserSelect,
-        memberships: { take: 1, select: { organization: { select: { id: true, name: true } } } },
-      },
-      ...getPaginationArgs(query),
-    }),
-    prisma.user.count({ where }),
-  ]);
-
-  return {
-    users: users.map(({ memberships, ...user }) => ({ ...user, organization: memberships[0]?.organization ?? null })),
-    meta: buildPaginationMeta(query, total),
-  };
-};
+// ── Payments, audit logs (the user directory lives in the users module) ──────────────────────────────────────
 
 const listPayments = async (query: ListPaymentsQuery) => {
   const where: Prisma.PaymentWhereInput = {
@@ -334,7 +302,6 @@ export const adminService = {
   getDashboard,
   listOrganizations,
   updateOrganizationStatus,
-  listUsers,
   listPayments,
   listAuditLogs,
   updatePlan,

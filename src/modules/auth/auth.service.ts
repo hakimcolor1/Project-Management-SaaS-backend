@@ -12,22 +12,9 @@ import {
   verifyRefreshToken,
 } from "../../utils/jwt.js";
 import { comparePassword, hashPassword } from "../../utils/password.js";
+import type { PublicUser } from "../users/user.interface.js";
+import { publicUserSelect } from "../users/user.service.js";
 import type { AuthTokens, GoogleLoginInput, LoginInput, RegisterInput } from "./auth.interface.js";
-
-/** The only user fields ever returned by the API (no password / googleId). */
-export const publicUserSelect = {
-  id: true,
-  name: true,
-  email: true,
-  avatar: true,
-  role: true,
-  isActive: true,
-  emailVerified: true,
-  createdAt: true,
-  updatedAt: true,
-} satisfies Prisma.UserSelect;
-
-export type PublicUser = Prisma.UserGetPayload<{ select: typeof publicUserSelect }>;
 
 export interface AuthResult {
   user: PublicUser;
@@ -248,47 +235,10 @@ const logout = async (rawToken: string | undefined): Promise<void> => {
   });
 };
 
-/** Profile of the signed-in user plus their organization (if any). */
-const getCurrentUser = async (userId: string) => {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: {
-      ...publicUserSelect,
-      memberships: {
-        take: 1,
-        select: {
-          joinedAt: true,
-          organization: { select: { id: true, name: true, slug: true, status: true, ownerId: true } },
-        },
-      },
-    },
-  });
-  if (!user) {
-    throw AppError.notFound("User not found");
-  }
-
-  const { memberships, ...profile } = user;
-  const membership = memberships[0];
-  return {
-    ...profile,
-    organization: membership
-      ? {
-          id: membership.organization.id,
-          name: membership.organization.name,
-          slug: membership.organization.slug,
-          status: membership.organization.status,
-          isOwner: membership.organization.ownerId === user.id,
-          joinedAt: membership.joinedAt,
-        }
-      : null,
-  };
-};
-
 export const authService = {
   register,
   login,
   loginWithGoogle,
   refreshTokens,
   logout,
-  getCurrentUser,
 };

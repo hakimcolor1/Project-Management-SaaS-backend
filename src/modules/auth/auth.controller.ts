@@ -3,6 +3,7 @@ import { getAuthUser } from "../../middlewares/auth.middleware.js";
 import { REFRESH_TOKEN_COOKIE, clearAuthCookies, readCookie, setAuthCookies } from "../../utils/cookies.js";
 import { sendSuccess } from "../../utils/response.js";
 import type { GoogleLoginInput, LoginInput, RefreshTokenBody, RegisterInput } from "./auth.interface.js";
+import { userService } from "../users/user.service.js";
 import { authService } from "./auth.service.js";
 
 // Controllers only translate HTTP ⇄ service calls; bodies were already
@@ -45,6 +46,6 @@ export const logout: RequestHandler = async (req, res) => {
 };
 
 export const getMe: RequestHandler = async (req, res) => {
-  const user = await authService.getCurrentUser(getAuthUser(req).id);
+  const user = await userService.getProfile(getAuthUser(req).id);
   sendSuccess(res, { message: "Current user retrieved successfully", data: user });
 };

@@ -2,12 +2,14 @@ import { Router } from "express";
 import { authenticate } from "../../middlewares/auth.middleware.js";
 import { authorize } from "../../middlewares/role.middleware.js";
 import { validate } from "../../middlewares/validate.middleware.js";
+import { planIdParamsSchema, updatePlanSchema } from "../subscriptions/subscription.validation.js";
+import { listUsers } from "../users/user.controller.js";
+import { listUsersQuerySchema } from "../users/user.validation.js";
 import {
   getDashboard,
   listAuditLogs,
   listOrganizations,
   listPayments,
-  listUsers,
   updateOrganizationStatus,
   updatePlan,
 } from "./admin.controller.js";
@@ -15,11 +17,8 @@ import {
   listAuditLogsQuerySchema,
   listOrganizationsQuerySchema,
   listPaymentsQuerySchema,
-  listUsersQuerySchema,
   organizationIdParamsSchema,
-  planIdParamsSchema,
   updateOrganizationStatusSchema,
-  updatePlanSchema,
 } from "./admin.validation.js";
 
 export const adminRoutes = Router();
